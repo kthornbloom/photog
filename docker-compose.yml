@@ -1,7 +1,7 @@
 name: photog
 services:
   photog:
-    image: kthor/photog:0.1.0
+    image: ghcr.io/kthor/photog:latest
     restart: unless-stopped
     ports:
       - target: 8080
@@ -70,5 +70,6 @@ x-casaos:
 
         On first launch, Photog indexes your library automatically. This takes 1-2 minutes
         for ~50,000 files. Thumbnails are generated on demand as you scroll.
+  scheme: http
   index: /
-  port_map: ${WEBUI_PORT:-8080}
+  port_map: "8080"
