@@ -2,18 +2,40 @@ name: Build & Push to GHCR
 
 on:
   push:
-    branches: [ main, master ]          # every push to main → :latest + :sha
-    tags: [ 'v*.*.*' ]          # git tag v0.2.0 → :v0.2.0 (recommended for CasaOS)
+    branches: [ main, master ]
+    tags: [ 'v*.*.*' ]
 
 permissions:
-  contents: read
-  packages: write               # needed to push
+  contents: write              # needed to push auto-tags
+  packages: write              # needed to push images
 
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0         # need full history for tag counting
+
+      - name: Auto-generate version tag
+        if: startsWith(github.ref, 'refs/heads/')
+        id: autotag
+        run: |
+          # Find the latest v0.0.X tag, increment it
+          LATEST=$(git tag -l 'v0.0.*' --sort=-v:refname | head -n1)
+          if [ -z "$LATEST" ]; then
+            NEXT="v0.0.1"
+          else
+            PATCH=$(echo "$LATEST" | sed 's/v0\.0\.//')
+            NEXT="v0.0.$((PATCH + 1))"
+          fi
+          echo "version=$NEXT" >> "$GITHUB_OUTPUT"
+          echo "Auto-tagging as $NEXT"
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag "$NEXT"
+          git push origin "$NEXT"
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -23,7 +45,7 @@ jobs:
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}   # built-in, no extra token needed
+          password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Extract metadata (tags, labels)
         id: meta
@@ -31,8 +53,8 @@ jobs:
         with:
           images: ghcr.io/${{ github.repository_owner }}/photog
           tags: |
-            type=ref,event=branch
-            type=ref,event=pr
+            type=raw,value=latest
+            type=raw,value=${{ steps.autotag.outputs.version }},enable=${{ steps.autotag.outputs.version != '' }}
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
             type=sha

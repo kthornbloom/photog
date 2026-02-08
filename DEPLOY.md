@@ -12,22 +12,16 @@ ghcr.io/kthornbloom/photog
 
 ### Available tags
 
+Every push to `master` automatically creates an incrementing version tag (`v0.0.1`, `v0.0.2`, `v0.0.3`, ...) and pushes Docker images with matching tags.
+
 | Tag | When it's created | Example |
 |-----|-------------------|---------|
-| `master` or `main` | Every push to the default branch | `ghcr.io/kthornbloom/photog:master` |
+| `latest` | Every push to the default branch | `ghcr.io/kthornbloom/photog:latest` |
+| `v0.0.X` | Every push (auto-incrementing) | `ghcr.io/kthornbloom/photog:v0.0.5` |
 | `sha-abc1234` | Every push (short commit SHA) | `ghcr.io/kthornbloom/photog:sha-a1b2c3d` |
-| `1.0.0`, `1.0` | When you push a `v1.0.0` git tag | `ghcr.io/kthornbloom/photog:1.0.0` |
+| `1.0.0`, `1.0` | When you manually push a `v1.0.0` git tag | `ghcr.io/kthornbloom/photog:1.0.0` |
 
-For CasaOS, use a semver tag (e.g. `:1.0.0`) when available, or `:master` for the latest build.
-
-### Creating a versioned release
-
-```bash
-git tag v1.0.0
-git push origin v1.0.0
-```
-
-GitHub Actions builds the image and tags it as `:1.0.0` and `:1.0` automatically.
+For CasaOS, use `:latest` for the simplest setup. CasaOS's "Check then update" will detect new versions automatically since each build gets a unique tag.
 
 ---
 
@@ -39,7 +33,7 @@ GitHub Actions builds the image and tags it as `:1.0.0` and `:1.0` automatically
 
 **Docker Image**
 ```
-ghcr.io/kthornbloom/photog:master
+ghcr.io/kthornbloom/photog:latest
 ```
 
 **App Name:** Photog
@@ -96,21 +90,12 @@ All of this data lives in the `/cache` volume. If you ever delete that volume, P
 
 Just push your changes to `main`/`master` (or tag a new release). GitHub Actions builds and pushes the new image to GHCR automatically.
 
-**If you're tracking `:master`:**
+Every push to `master` automatically creates a new version tag and pushes a fresh image. To update on CasaOS:
 
-On CasaOS, go to the Photog app settings and click **Save** (or recreate the container) to pull the latest image. CasaOS caches the image locally, so you need to trigger a re-pull.
+1. Click the three-dot menu on the Photog tile
+2. Click **Check then update**
 
-**If you're using semver tags (recommended):**
-
-1. Tag and push a new release:
-   ```bash
-   git tag v0.2.0
-   git push origin v0.2.0
-   ```
-
-2. On CasaOS, update the image tag to the new version (e.g. `ghcr.io/kthornbloom/photog:0.2.0`) and click **Save**. CasaOS pulls the new image and restarts the container.
-
-Either way, your cache and database carry over -- no re-indexing needed unless the database schema changed. Your photo library volume and cache volume stay exactly where they are.
+CasaOS detects the new version and pulls it. Your cache and database carry over -- no re-indexing needed unless the database schema changed. Your photo library volume and cache volume stay exactly where they are.
 
 ---
 
