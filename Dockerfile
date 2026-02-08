@@ -31,7 +31,10 @@ FROM alpine:3.19
 
 RUN apk add --no-cache ca-certificates tzdata
 
+WORKDIR /app
+
 COPY --from=backend-builder /photog /usr/local/bin/photog
+COPY --from=frontend-builder /build/ui/dist ./ui/dist
 
 # Default volumes
 VOLUME ["/photos", "/cache"]
