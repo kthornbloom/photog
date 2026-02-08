@@ -1,0 +1,74 @@
+name: photog
+services:
+  photog:
+    image: kthor/photog:0.1.0
+    restart: unless-stopped
+    ports:
+      - target: 8080
+        published: ${WEBUI_PORT:-8080}
+        protocol: tcp
+    volumes:
+      - type: bind
+        source: /DATA/Media/Photos
+        target: /photos
+      - type: bind
+        source: /DATA/AppData/$AppID/cache
+        target: /cache
+    environment:
+      PUID: $PUID
+      PGID: $PGID
+      TZ: $TZ
+      PHOTOG_PHOTO_PATHS: /photos
+      PHOTOG_CACHE_DIR: /cache
+    x-casaos:
+      envs:
+        - container: PHOTOG_PHOTO_PATHS
+          description:
+            en_US: Comma-separated list of photo directories inside the container to scan.
+        - container: PHOTOG_CACHE_DIR
+          description:
+            en_US: Directory where the database and thumbnail cache are stored.
+      ports:
+        - container: "8080"
+          description:
+            en_US: Web UI port
+      volumes:
+        - container: /photos
+          description:
+            en_US: Your photo and video library. Mounted read-only — originals are never modified.
+        - container: /cache
+          description:
+            en_US: Persistent storage for the SQLite index and generated thumbnails.
+
+x-casaos:
+  architectures:
+    - amd64
+    - arm64
+    - arm
+  main: photog
+  author: kthor
+  category: Media
+  description:
+    en_US: >
+      A fast, self-hosted photo and video viewer for large existing libraries.
+      Scans your photos once, builds an index with EXIF dates, and serves a
+      Google Photos-style timeline with on-demand WebP thumbnails. Read-only
+      access to your originals — nothing is ever moved or modified. Installable
+      as a PWA on any device.
+  developer: kthor
+  icon: https://cdn.jsdelivr.net/gh/kthor/photog@main/casaos/icon.png
+  tagline:
+    en_US: Fast, read-only photo timeline for your existing library.
+  title:
+    en_US: Photog
+  tips:
+    before_install:
+      en_US: |
+        Change the `/DATA/Media/Photos` volume to point at your actual photo library.
+        If your photos are in multiple folders, add additional volume entries and set
+        `PHOTOG_PHOTO_PATHS` to a comma-separated list (e.g. `/photos/camera,/photos/archive`).
+
+        On first launch, Photog indexes your library automatically. This takes 1-2 minutes
+        for ~50,000 files. Thumbnails are generated on demand as you scroll.
+  index: /
+  port_map: ${WEBUI_PORT:-8080}

@@ -1,0 +1,19 @@
+server:
+  port: 8080
+  host: "0.0.0.0"
+
+photos:
+  paths:
+    - "/photos"
+    # Add additional paths as needed:
+    # - "/photos/camera-roll"
+    # - "/photos/archive"
+
+cache:
+  dir: "/cache"
+
+thumbnail:
+  small_size: 250
+  medium_size: 600
+  large_size: 1200
+  quality: 80
