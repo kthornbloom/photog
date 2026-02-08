@@ -249,6 +249,62 @@ func (db *DB) SearchByDateRange(start, end time.Time, offset, limit int) ([]*mod
 	return photos, total, nil
 }
 
+// GetMonthBuckets returns per-month counts ordered by date descending, with cumulative offsets.
+// This is a lightweight query used by the scrubber to know the full date range and jump to any month.
+func (db *DB) GetMonthBuckets() ([]*models.MonthBucket, error) {
+	rows, err := db.conn.Query(`
+		SELECT strftime('%Y-%m', taken_at) AS month, COUNT(*) AS cnt
+		FROM photos
+		GROUP BY month
+		ORDER BY month DESC
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var buckets []*models.MonthBucket
+	cumulative := 0
+	for rows.Next() {
+		var month string
+		var count int
+		if err := rows.Scan(&month, &count); err != nil {
+			continue
+		}
+		// Parse the month string to generate a label
+		t, _ := time.Parse("2006-01", month)
+		label := t.Format("January 2006")
+
+		buckets = append(buckets, &models.MonthBucket{
+			Month:            month,
+			Label:            label,
+			Count:            count,
+			CumulativeOffset: cumulative,
+		})
+		cumulative += count
+	}
+	return buckets, nil
+}
+
+// GetAllPaths returns all photo/video paths and media types for thumbnail pre-generation.
+func (db *DB) GetAllPaths() ([]struct{ Path, MediaType string }, error) {
+	rows, err := db.conn.Query("SELECT path, media_type FROM photos ORDER BY taken_at DESC")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var items []struct{ Path, MediaType string }
+	for rows.Next() {
+		var item struct{ Path, MediaType string }
+		if err := rows.Scan(&item.Path, &item.MediaType); err != nil {
+			continue
+		}
+		items = append(items, item)
+	}
+	return items, nil
+}
+
 // Close closes the database connection.
 func (db *DB) Close() error {
 	return db.conn.Close()

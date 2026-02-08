@@ -49,7 +49,7 @@
   --safe-bottom: env(safe-area-inset-bottom, 0px);
 
   /* Thumbnail grid sizing */
-  --thumb-min: 140px;
+  --thumb-min: 100px;
   --thumb-max: 220px;
 
   color-scheme: dark;

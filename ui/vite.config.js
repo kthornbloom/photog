@@ -6,6 +6,8 @@ export default defineConfig({
   plugins: [
     vue(),
     VitePWA({
+      // Only enable service worker in production builds to avoid caching issues in dev
+      devOptions: { enabled: false },
       registerType: 'autoUpdate',
       includeAssets: ['favicon.svg'],
       manifest: {
@@ -80,7 +82,6 @@ export default defineConfig({
   server: {
     proxy: {
       '/api': {
-        // In dev: proxy to mock server (port 3001) or Go backend (port 8080)
         target: process.env.API_TARGET || 'http://localhost:3001',
         changeOrigin: true,
       },

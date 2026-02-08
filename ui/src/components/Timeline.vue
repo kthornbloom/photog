@@ -1,6 +1,6 @@
 <script setup>
-import { ref, reactive, onMounted, onUnmounted, computed, nextTick } from 'vue'
-import { fetchTimeline, thumbUrl } from '../api.js'
+import { ref, reactive, onMounted, computed, nextTick } from 'vue'
+import { fetchTimeline, fetchTimelineMonths, thumbUrl } from '../api.js'
 
 const emit = defineEmits(['open'])
 
@@ -17,7 +17,25 @@ const scrollContainer = ref(null)
 // Track loaded state per photo id
 const loadedIds = reactive(new Set())
 
-onMounted(() => {
+// ---------------------------------------------------------------------------
+// Month buckets — loaded once from the server for the scrubber.
+// Each entry: { month: "2024-01", label: "January 2024", count: 47, cumulative_offset: 0 }
+// Ordered newest-first (matches timeline order).
+// ---------------------------------------------------------------------------
+const monthBuckets = ref([])
+const monthBucketsTotal = computed(() => {
+  if (monthBuckets.value.length === 0) return 0
+  const last = monthBuckets.value[monthBuckets.value.length - 1]
+  return last.cumulative_offset + last.count
+})
+
+onMounted(async () => {
+  // Fetch month buckets first (lightweight), then start loading timeline
+  try {
+    monthBuckets.value = await fetchTimelineMonths()
+  } catch (e) {
+    console.warn('Could not load month buckets:', e)
+  }
   loadMore()
 })
 
@@ -30,24 +48,7 @@ async function loadMore() {
     totalCount.value = data.total_count
     hasMore.value = data.has_more
 
-    // Merge new groups with existing ones
-    for (const group of data.groups) {
-      const existing = groups.value.find(g => g.date === group.date)
-      if (existing) {
-        const existingIds = new Set(existing.photos.map(p => p.id))
-        for (const photo of group.photos) {
-          if (!existingIds.has(photo.id)) {
-            existing.photos.push(photo)
-            existing.count = existing.photos.length
-          }
-        }
-      } else {
-        groups.value.push(group)
-      }
-    }
-
-    // Build flat photo list for viewer navigation
-    allPhotos.value = groups.value.flatMap(g => g.photos)
+    mergeGroups(data.groups)
 
     offset.value += PAGE_SIZE
   } catch (e) {
@@ -57,16 +58,120 @@ async function loadMore() {
   }
 }
 
+// Load the page of data *before* the current loaded window (for scrolling up after a scrub-jump)
+async function loadBefore() {
+  if (loading.value || loadedBaseOffset.value <= 0) return
+  loading.value = true
+
+  try {
+    const prevOffset = Math.max(0, loadedBaseOffset.value - PAGE_SIZE)
+    const count = loadedBaseOffset.value - prevOffset // might be < PAGE_SIZE near the start
+    const data = await fetchTimeline(prevOffset, count)
+
+    // Measure scroll height before inserting so we can preserve position
+    const el = scrollContainer.value
+    const prevScrollHeight = el ? el.scrollHeight : 0
+
+    // Prepend groups (mergeGroups appends, so we need to insert before existing)
+    prependGroups(data.groups)
+
+    loadedBaseOffset.value = prevOffset
+
+    // After DOM update, adjust scrollTop to keep the view stable
+    await nextTick()
+    if (el) {
+      const addedHeight = el.scrollHeight - prevScrollHeight
+      el.scrollTop += addedHeight
+    }
+  } catch (e) {
+    console.error('Failed to load earlier timeline data:', e)
+  } finally {
+    loading.value = false
+  }
+}
+
+function prependGroups(newGroups) {
+  for (const group of newGroups) {
+    const existing = groups.value.find(g => g.date === group.date)
+    if (existing) {
+      // Merge photos into the existing group
+      const existingIds = new Set(existing.photos.map(p => p.id))
+      const toAdd = group.photos.filter(p => !existingIds.has(p.id))
+      if (toAdd.length) {
+        existing.photos.unshift(...toAdd)
+        existing.count = existing.photos.length
+      }
+    } else {
+      // Insert in date order (these are newer, so prepend)
+      groups.value.unshift(group)
+    }
+  }
+  allPhotos.value = groups.value.flatMap(g => g.photos)
+}
+
+// Load a specific page around a target offset (for scrubber jumps)
+async function loadAtOffset(targetOffset) {
+  if (loading.value) return
+  loading.value = true
+
+  try {
+    // Load a page centered on the target offset
+    const data = await fetchTimeline(targetOffset, PAGE_SIZE)
+    totalCount.value = data.total_count
+    hasMore.value = (targetOffset + PAGE_SIZE) < data.total_count
+
+    // Replace the entire timeline with data at this point
+    groups.value = []
+    loadedIds.clear()
+    mergeGroups(data.groups)
+
+    loadedBaseOffset.value = targetOffset
+    offset.value = targetOffset + PAGE_SIZE
+  } catch (e) {
+    console.error('Failed to load timeline at offset:', e)
+  } finally {
+    loading.value = false
+  }
+}
+
+function mergeGroups(newGroups) {
+  for (const group of newGroups) {
+    const existing = groups.value.find(g => g.date === group.date)
+    if (existing) {
+      const existingIds = new Set(existing.photos.map(p => p.id))
+      for (const photo of group.photos) {
+        if (!existingIds.has(photo.id)) {
+          existing.photos.push(photo)
+          existing.count = existing.photos.length
+        }
+      }
+    } else {
+      groups.value.push(group)
+    }
+  }
+  // Build flat photo list for viewer navigation
+  allPhotos.value = groups.value.flatMap(g => g.photos)
+}
+
 function onImageLoad(photoId) {
   loadedIds.add(photoId)
 }
 
 function onScroll(e) {
   const el = e.target
+
+  // Load more at bottom (forward in time = older photos)
   const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 800
   if (nearBottom && !loading.value && hasMore.value) {
     loadMore()
   }
+
+  // Load more at top (backward = newer photos) when we jumped via scrubber
+  const nearTop = el.scrollTop < 400
+  if (nearTop && !loading.value && loadedBaseOffset.value > 0) {
+    loadBefore()
+  }
+
   updateScrubberFromScroll()
 }
 
@@ -93,48 +198,131 @@ function onThumbLeave() {
 }
 
 // ---------------------------------------------------------------------------
-// Year scrubber (right-side drag handle like Google Photos)
+// Year/month scrubber (right-side drag handle like Google Photos)
+// Uses monthBuckets for the full date range regardless of loaded data.
 // ---------------------------------------------------------------------------
-const scrubberYear = ref('')
+const scrubberLabel = ref('')          // "Jan 2024" style label
 const scrubberVisible = ref(false)
 const scrubberDragging = ref(false)
-const scrubberHandleTop = ref(0)
+const scrubberHandleTop = ref(0)       // 0-100 percentage
+const scrubberTrack = ref(null)        // ref to .scrubber element
 let scrubberHideTimer = null
 
-// Compute the year range from loaded groups
-const yearRange = computed(() => {
-  if (groups.value.length === 0) return { min: new Date().getFullYear(), max: new Date().getFullYear() }
-  const years = groups.value.map(g => parseInt(g.date.split('-')[0]))
-  return { min: Math.min(...years), max: Math.max(...years) }
+// The global offset of the first photo currently loaded in the view.
+// When we load from offset 0 sequentially this stays 0.
+// After a scrub-jump via loadAtOffset it equals that target offset.
+const loadedBaseOffset = ref(0)
+
+const MONTH_NAMES = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec']
+
+// Compute ruler tick marks from monthBuckets
+// Each tick: { pct: 0-100, isYear: boolean, label: string }
+const scrubberTicks = computed(() => {
+  const buckets = monthBuckets.value
+  if (buckets.length === 0) return []
+  const total = monthBucketsTotal.value
+  if (total === 0) return []
+  const ticks = []
+  for (const b of buckets) {
+    const pct = (b.cumulative_offset / total) * 100
+    const [yr, mo] = b.month.split('-')
+    const isYear = mo === '01' || b === buckets[0] // first bucket always gets a year mark
+    ticks.push({ pct, isYear, label: yr })
+  }
+  return ticks
 })
 
-function updateScrubberFromScroll() {
-  const el = scrollContainer.value
-  if (!el || groups.value.length === 0) return
+function fractionFromPointer(e) {
+  const track = scrubberTrack.value
+  if (!track) return 0
+  const rect = track.getBoundingClientRect()
+  const y = Math.max(0, Math.min(e.clientY - rect.top, rect.height))
+  return y / rect.height
+}
 
-  // Show scrubber briefly
-  scrubberVisible.value = true
-  clearTimeout(scrubberHideTimer)
-  if (!scrubberDragging.value) {
-    scrubberHideTimer = setTimeout(() => { scrubberVisible.value = false }, 1500)
-  }
-
-  const scrollFraction = el.scrollTop / Math.max(1, el.scrollHeight - el.clientHeight)
-  scrubberHandleTop.value = scrollFraction * 100
-
-  // Find which group header is near the current viewport top
-  const groupEls = el.querySelectorAll('.timeline-group')
-  for (const groupEl of groupEls) {
-    const rect = groupEl.getBoundingClientRect()
-    const containerRect = el.getBoundingClientRect()
-    if (rect.bottom > containerRect.top + 60) {
-      const dateAttr = groupEl.dataset.date
-      if (dateAttr) {
-        scrubberYear.value = dateAttr.split('-')[0]
-      }
+function bucketFromFraction(fraction) {
+  if (monthBuckets.value.length === 0) return null
+  const total = monthBucketsTotal.value
+  const targetPos = Math.round(fraction * total)
+  let target = monthBuckets.value[0]
+  for (const bucket of monthBuckets.value) {
+    if (bucket.cumulative_offset <= targetPos) {
+      target = bucket
+    } else {
       break
     }
   }
+  return target
+}
+
+function labelFromBucket(bucket) {
+  if (!bucket) return ''
+  const [yr, mo] = bucket.month.split('-')
+  return `${MONTH_NAMES[parseInt(mo, 10) - 1]} ${yr}`
+}
+
+function showScrubberBriefly() {
+  if (scrubberDragging.value) return
+  scrubberVisible.value = true
+  clearTimeout(scrubberHideTimer)
+  scrubberHideTimer = setTimeout(() => { scrubberVisible.value = false }, 1500)
+}
+
+// ---------------------------------------------------------------------------
+// Scrubber position from scroll: find the topmost visible .timeline-group
+// by checking which section's bottom edge is still below the viewport top.
+// Groups are few (5-15 on screen), so this is cheap on every scroll frame.
+// ---------------------------------------------------------------------------
+
+// Build a lookup from month -> tick pct for fast access
+const tickPctByMonth = computed(() => {
+  const map = {}
+  const total = monthBucketsTotal.value
+  if (total > 0) {
+    for (const b of monthBuckets.value) {
+      map[b.month] = (b.cumulative_offset / total) * 100
+    }
+  }
+  return map
+})
+
+function updateScrubberFromScroll() {
+  if (scrubberDragging.value) return
+
+  const el = scrollContainer.value
+  if (!el || groups.value.length === 0) return
+
+  const containerTop = el.getBoundingClientRect().top
+
+  // Walk through rendered group sections and find the one currently at the top.
+  // Each section has data-date. We want the last section whose top is at or
+  // above the viewport top (i.e. the one the user is currently scrolled into).
+  const groupEls = el.querySelectorAll('.timeline-group')
+  let currentDate = null
+
+  for (const g of groupEls) {
+    if (g.getBoundingClientRect().top <= containerTop + 60) {
+      currentDate = g.dataset.date
+    } else {
+      // Past the viewport top — all subsequent are further down
+      break
+    }
+  }
+
+  // If nothing is above the top yet, use the first group
+  if (!currentDate && groupEls.length > 0) {
+    currentDate = groupEls[0].dataset.date
+  }
+
+  if (!currentDate) return
+
+  const pct = tickPctByMonth.value[currentDate]
+  if (pct == null) return
+
+  scrubberHandleTop.value = pct
+  const bucket = monthBuckets.value.find(b => b.month === currentDate)
+  if (bucket) scrubberLabel.value = labelFromBucket(bucket)
+  showScrubberBriefly()
 }
 
 function onScrubberPointerDown(e) {
@@ -145,35 +333,88 @@ function onScrubberPointerDown(e) {
   onScrubberMove(e)
 
   const onMove = (ev) => onScrubberMove(ev)
-  const onUp = () => {
+  const onUp = (ev) => {
     scrubberDragging.value = false
     scrubberHideTimer = setTimeout(() => { scrubberVisible.value = false }, 1500)
     window.removeEventListener('pointermove', onMove)
     window.removeEventListener('pointerup', onUp)
+    onScrubberRelease()
   }
   window.addEventListener('pointermove', onMove)
   window.addEventListener('pointerup', onUp)
 }
 
+// Track target offset during drag (we only jump on release to avoid spamming)
+let pendingScrubOffset = null
+
 function onScrubberMove(e) {
+  if (monthBuckets.value.length === 0) return
+
+  const fraction = fractionFromPointer(e)
+  scrubberHandleTop.value = fraction * 100
+
+  const bucket = bucketFromFraction(fraction)
+  if (bucket) {
+    scrubberLabel.value = labelFromBucket(bucket)
+    pendingScrubOffset = bucket.cumulative_offset
+  }
+}
+
+async function onScrubberRelease() {
+  if (pendingScrubOffset === null) return
+
+  const targetOffset = pendingScrubOffset
+  pendingScrubOffset = null
+
+  if (targetOffset >= loadedBaseOffset.value && targetOffset < offset.value) {
+    // Target is within the currently loaded window — just scroll to it
+    scrollToLoadedOffset(targetOffset)
+  } else {
+    // Target is outside loaded data — fetch from server
+    await loadAtOffset(targetOffset)
+    await nextTick()
+    if (scrollContainer.value) {
+      scrollContainer.value.scrollTop = 0
+    }
+  }
+}
+
+function scrollToLoadedOffset(targetOffset) {
+  let targetMonth = null
+  for (const bucket of monthBuckets.value) {
+    if (bucket.cumulative_offset === targetOffset) {
+      targetMonth = bucket.month
+      break
+    }
+    if (bucket.cumulative_offset > targetOffset) break
+    targetMonth = bucket.month
+  }
+
+  if (!targetMonth) return
   const el = scrollContainer.value
   if (!el) return
 
-  const track = el.querySelector('.scrubber-track') || el.closest('.timeline')
-  const rect = el.getBoundingClientRect()
-  const y = Math.max(0, Math.min(e.clientY - rect.top, rect.height))
-  const fraction = y / rect.height
+  const groupEl = el.querySelector(`.timeline-group[data-date="${targetMonth}"]`)
+  if (groupEl) {
+    groupEl.scrollIntoView({ behavior: 'instant', block: 'start' })
+  }
+}
 
-  // Scroll to that fraction of the total scroll height
-  const maxScroll = el.scrollHeight - el.clientHeight
-  el.scrollTop = fraction * maxScroll
+// Allow clicking on the scrubber track itself (not just handle) to jump
+function onScrubberTrackClick(e) {
+  // Ignore if click was on the handle itself (it handles its own events)
+  if (e.target.closest('.scrubber-handle')) return
+  if (monthBuckets.value.length === 0) return
 
+  const fraction = fractionFromPointer(e)
   scrubberHandleTop.value = fraction * 100
 
-  // Determine the year at this position
-  const range = yearRange.value
-  const year = Math.round(range.max - fraction * (range.max - range.min))
-  scrubberYear.value = String(year)
+  const bucket = bucketFromFraction(fraction)
+  if (bucket) {
+    scrubberLabel.value = labelFromBucket(bucket)
+    pendingScrubOffset = bucket.cumulative_offset
+    onScrubberRelease()
+  }
 }
 </script>
 
@@ -212,17 +453,19 @@ function onScrubberMove(e) {
           @mouseleave="onThumbLeave"
         >
           <img
-            v-if="!isVideo(photo) || hoverVideoId !== photo.id"
+            v-if="hoverVideoId !== photo.id"
             :src="thumbUrl(photo.id, 'sm')"
             :alt="photo.filename"
             class="grid-thumb"
             loading="lazy"
             decoding="async"
             @load="onImageLoad(photo.id)"
+            @error="onImageLoad(photo.id)"
           />
           <video
             v-if="isVideo(photo) && hoverVideoId === photo.id"
             :src="`/api/media/${photo.id}`"
+            :poster="thumbUrl(photo.id, 'sm')"
             class="grid-thumb"
             autoplay
             muted
@@ -247,18 +490,37 @@ function onScrubberMove(e) {
       That's everything — {{ totalCount.toLocaleString() }} items
     </div>
 
-    <!-- Year scrubber handle -->
+    <!-- Year/month scrubber -->
     <div
       class="scrubber"
+      ref="scrubberTrack"
       :class="{ visible: scrubberVisible || scrubberDragging, dragging: scrubberDragging }"
+      @click="onScrubberTrackClick"
     >
+      <!-- Ruler ticks -->
+      <div class="scrubber-ruler">
+        <template v-for="(tick, i) in scrubberTicks" :key="i">
+          <div
+            class="scrubber-tick"
+            :class="{ 'is-year': tick.isYear }"
+            :style="{ top: tick.pct + '%' }"
+          >
+            <span v-if="tick.isYear" class="scrubber-tick-label">{{ tick.label }}</span>
+          </div>
+        </template>
+      </div>
+
+      <!-- Drag handle -->
       <div
         class="scrubber-handle"
         :style="{ top: scrubberHandleTop + '%' }"
         @pointerdown="onScrubberPointerDown"
       >
-        <span class="scrubber-label" v-if="scrubberYear">{{ scrubberYear }}</span>
-        <div class="scrubber-pill"></div>
+        <!-- Tooltip bar extending left -->
+        <div class="scrubber-tooltip" v-if="scrubberDragging && scrubberLabel">
+          {{ scrubberLabel }}
+        </div>
+        <div class="scrubber-knob"></div>
       </div>
     </div>
   </div>
@@ -269,10 +531,13 @@ function onScrubberMove(e) {
   flex: 1;
   overflow-y: auto;
   overflow-x: hidden;
-  padding: var(--gap-lg);
+  padding: 0 var(--gap-lg);
   padding-bottom: calc(var(--safe-bottom) + var(--gap-xl));
 }
 
+.timeline::-webkit-scrollbar {
+    display: none;
+}
 /* ---- Empty State ---- */
 .empty-state {
   display: flex;
@@ -456,12 +721,12 @@ function onScrubberMove(e) {
   }
 }
 
-/* ---- Year Scrubber ---- */
+/* ---- Year/Month Scrubber ---- */
 .scrubber {
   position: fixed;
-  top: 0;
+  top: 95px;
   right: 0;
-  bottom: 0;
+  bottom: 40px;
   width: 44px;
   pointer-events: none;
   z-index: 20;
@@ -471,6 +736,7 @@ function onScrubberMove(e) {
 
 .scrubber.visible {
   opacity: 1;
+  pointer-events: auto;
 }
 
 .scrubber.dragging {
@@ -478,57 +744,119 @@ function onScrubberMove(e) {
   opacity: 1;
 }
 
+/* ---- Ruler ticks ---- */
+.scrubber-ruler {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  right: 12px;
+  width: 20px;
+}
+
+.scrubber-tick {
+  position: absolute;
+  right: 0;
+  transform: translateY(-50%);
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+}
+
+/* Month dot */
+.scrubber-tick::after {
+  content: '';
+  display: block;
+  width: 3px;
+  height: 3px;
+  border-radius: 50%;
+  background: var(--text-muted);
+  opacity: 0.5;
+  flex-shrink: 0;
+}
+
+/* Year mark – longer line instead of dot */
+.scrubber-tick.is-year::after {
+  width: 12px;
+  height: 1px;
+  border-radius: 0;
+  background: var(--text-secondary);
+  opacity: 0.7;
+}
+
+.scrubber-tick-label {
+  font-size: 0.55rem;
+  font-weight: 600;
+  color: var(--text-muted);
+  margin-right: 4px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  letter-spacing: 0.02em;
+  user-select: none;
+}
+
+/* ---- Drag handle (square knob) ---- */
 .scrubber-handle {
   position: absolute;
   right: 4px;
   transform: translateY(-50%);
   display: flex;
   align-items: center;
-  gap: 6px;
   cursor: grab;
   pointer-events: auto;
   touch-action: none;
-  flex-direction: row-reverse;
 }
 
 .scrubber-handle:active {
   cursor: grabbing;
 }
 
-.scrubber-pill {
-  width: 4px;
-  height: 40px;
+.scrubber-knob {
+  width: 18px;
+  height: 18px;
+  border-radius: 3px;
   background: var(--accent);
-  border-radius: 2px;
-  opacity: 0.8;
-  transition: width 150ms ease, opacity 150ms ease;
+  opacity: 0.85;
+  transition: opacity 150ms ease, transform 150ms ease, box-shadow 150ms ease;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.4);
 }
 
-.scrubber.dragging .scrubber-pill {
-  width: 5px;
+.scrubber.dragging .scrubber-knob {
   opacity: 1;
+  transform: scale(1.15);
+  box-shadow: 0 2px 10px rgba(59, 130, 246, 0.5);
 }
 
-.scrubber-label {
-  font-size: 0.7rem;
+/* ---- Tooltip bar (extends left from handle) ---- */
+.scrubber-tooltip {
+  position: absolute;
+  right: calc(100% + 8px);
+  white-space: nowrap;
+  font-size: 0.8rem;
   font-weight: 600;
   color: var(--text-primary);
-  background: var(--bg-surface);
-  border: 1px solid var(--border);
-  padding: 4px 8px;
+  background: var(--accent);
+  padding: 5px 12px;
   border-radius: var(--radius-sm);
-  white-space: nowrap;
   font-variant-numeric: tabular-nums;
-  box-shadow: 0 2px 8px var(--shadow);
-  opacity: 0;
-  transform: translateX(8px);
-  transition: opacity 150ms ease, transform 150ms ease;
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.5);
+  user-select: none;
+  animation: tooltipIn 120ms ease;
 }
 
-.scrubber.visible .scrubber-label,
-.scrubber.dragging .scrubber-label {
-  opacity: 1;
-  transform: translateX(0);
+.scrubber-tooltip::after {
+  content: '';
+  position: absolute;
+  right: -4px;
+  top: 50%;
+  transform: translateY(-50%);
+  border: 4px solid transparent;
+  border-left-color: var(--accent);
+  border-right-width: 0;
+}
+
+@keyframes tooltipIn {
+  from { opacity: 0; transform: translateX(6px); }
+  to { opacity: 1; transform: translateX(0); }
 }
 
 /* Make the timeline position: relative for the scrubber to anchor to */

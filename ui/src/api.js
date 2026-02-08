@@ -21,6 +21,14 @@ export function fetchTimeline(offset = 0, limit = 100) {
 }
 
 /**
+ * Fetch the lightweight month-bucket list for the scrubber.
+ * Returns [{month, label, count, cumulative_offset}, ...] ordered newest-first.
+ */
+export function fetchTimelineMonths() {
+  return request('/timeline/months')
+}
+
+/**
  * Fetch a single photo's metadata.
  */
 export function fetchPhoto(id) {

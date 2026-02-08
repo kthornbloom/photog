@@ -122,6 +122,31 @@ const server = http.createServer((req, res) => {
     res.end(JSON.stringify(data))
   }
 
+  // Route: /api/timeline/months (must be before /api/timeline)
+  if (path === '/api/timeline/months') {
+    const monthMap = new Map()
+    const monthOrder = []
+    for (const p of ALL_PHOTOS) {
+      const d = new Date(p.taken_at)
+      const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`
+      if (!monthMap.has(key)) {
+        monthMap.set(key, 0)
+        monthOrder.push(key)
+      }
+      monthMap.set(key, monthMap.get(key) + 1)
+    }
+    let cumulative = 0
+    const buckets = monthOrder.map(key => {
+      const count = monthMap.get(key)
+      const [y, m] = key.split('-')
+      const label = new Date(parseInt(y), parseInt(m) - 1).toLocaleDateString('en-US', { month: 'long', year: 'numeric' })
+      const bucket = { month: key, label, count, cumulative_offset: cumulative }
+      cumulative += count
+      return bucket
+    })
+    return json(buckets)
+  }
+
   // Route: /api/timeline
   if (path === '/api/timeline') {
     const offset = parseInt(url.searchParams.get('offset') || '0')

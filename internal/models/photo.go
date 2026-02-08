@@ -41,3 +41,11 @@ type StatsResponse struct {
 	OldestDate  string `json:"oldest_date"`
 	NewestDate  string `json:"newest_date"`
 }
+
+// MonthBucket represents a single month in the timeline with its count and cumulative offset.
+type MonthBucket struct {
+	Month            string `json:"month"`             // "2024-01"
+	Label            string `json:"label"`             // "January 2024"
+	Count            int    `json:"count"`             // photos in this month
+	CumulativeOffset int    `json:"cumulative_offset"` // offset of first photo in this month (within full timeline)
+}

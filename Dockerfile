@@ -29,7 +29,7 @@ RUN CGO_ENABLED=1 GOOS=linux go build -ldflags="-s -w" -o /photog .
 # ---- Stage 3: Final minimal image ----
 FROM alpine:3.19
 
-RUN apk add --no-cache ca-certificates tzdata
+RUN apk add --no-cache ca-certificates tzdata ffmpeg
 
 WORKDIR /app
 

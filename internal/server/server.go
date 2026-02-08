@@ -42,6 +42,7 @@ func New(cfg *config.Config, db *database.DB, idx *indexer.Indexer, thumbs *thum
 
 func (s *Server) routes() {
 	// API routes
+	s.mux.HandleFunc("/api/timeline/months", s.handleTimelineMonths)
 	s.mux.HandleFunc("/api/timeline", s.handleTimeline)
 	s.mux.HandleFunc("/api/photo/", s.handlePhoto)
 	s.mux.HandleFunc("/api/thumb/", s.handleThumb)
@@ -94,6 +95,18 @@ func (s *Server) handleTimeline(w http.ResponseWriter, r *http.Request) {
 	jsonResponse(w, timeline)
 }
 
+// handleTimelineMonths returns the lightweight month-bucket list for the scrubber.
+func (s *Server) handleTimelineMonths(w http.ResponseWriter, r *http.Request) {
+	buckets, err := s.db.GetMonthBuckets()
+	if err != nil {
+		jsonError(w, "Failed to fetch month buckets", http.StatusInternalServerError)
+		return
+	}
+	// Cache for 5 minutes — lightweight and doesn't change often
+	w.Header().Set("Cache-Control", "public, max-age=300")
+	jsonResponse(w, buckets)
+}
+
 // handlePhoto returns photo metadata by ID.
 func (s *Server) handlePhoto(w http.ResponseWriter, r *http.Request) {
 	idStr := strings.TrimPrefix(r.URL.Path, "/api/photo/")
@@ -143,13 +156,17 @@ func (s *Server) handleThumb(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Only generate thumbnails for images
-	if photo.MediaType != "image" {
-		http.Error(w, "Thumbnails only available for images", http.StatusBadRequest)
-		return
+	var thumbPath string
+	if photo.MediaType == "video" {
+		// Video thumbnail via ffmpeg
+		if !s.thumbs.HasFFmpeg() {
+			http.Error(w, "Video thumbnails unavailable (ffmpeg not installed)", http.StatusNotImplemented)
+			return
+		}
+		thumbPath, err = s.thumbs.GetOrCreateVideo(photo.Path, size)
+	} else {
+		thumbPath, err = s.thumbs.GetOrCreate(photo.Path, size)
 	}
-
-	thumbPath, err := s.thumbs.GetOrCreate(photo.Path, size)
 	if err != nil {
 		log.Printf("Thumbnail error for %s: %v", photo.Path, err)
 		http.Error(w, "Failed to generate thumbnail", http.StatusInternalServerError)

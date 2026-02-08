@@ -40,7 +40,7 @@ function formatSize(bytes) {
   border-bottom: 1px solid var(--border);
   flex-shrink: 0;
   z-index: 100;
-  min-height: 52px;
+  height: 55px;
 }
 
 .header-left {
