@@ -2,7 +2,7 @@ name: Build & Push to GHCR
 
 on:
   push:
-    branches: [ main ]          # every push to main → :latest + :sha
+    branches: [ main, master ]          # every push to main → :latest + :sha
     tags: [ 'v*.*.*' ]          # git tag v0.2.0 → :v0.2.0 (recommended for CasaOS)
 
 permissions:
