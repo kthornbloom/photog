@@ -37,6 +37,13 @@ jobs:
             type=semver,pattern={{major}}.{{minor}}
             type=sha
 
+      - name: Ensure go.sum exists
+        run: |
+          if [ ! -f go.sum ]; then
+            echo "go.sum missing — creating empty file for Docker cache key"
+            touch go.sum
+          fi
+
       - name: Build and push
         uses: docker/build-push-action@v6
         with:

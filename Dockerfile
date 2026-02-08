@@ -18,8 +18,8 @@ FROM golang:1.22-alpine AS backend-builder
 RUN apk add --no-cache gcc musl-dev
 
 WORKDIR /build
-COPY go.mod go.sum ./
-RUN go mod download
+COPY go.mod go.sum* ./
+RUN go mod tidy && go mod download
 
 COPY . .
 COPY --from=frontend-builder /build/ui/dist ./ui/dist
