@@ -2,16 +2,32 @@
 
 ## Before you start
 
-You need a Docker image available for CasaOS to pull. The easiest way is to build and push it to Docker Hub (or GitHub Container Registry) from any machine with Docker:
+Every push to `main`/`master` automatically builds a Docker image and publishes it to the GitHub Container Registry (GHCR) via GitHub Actions. You don't need to build or push anything manually.
 
-```bash
-git clone https://github.com/YOUR_USER/photog.git
-cd photog
-docker build -t YOUR_DOCKERHUB_USER/photog:0.1.0 .
-docker push YOUR_DOCKERHUB_USER/photog:0.1.0
+The image is available at:
+
+```
+ghcr.io/kthornbloom/photog
 ```
 
-Replace `YOUR_DOCKERHUB_USER` with your actual Docker Hub username. Use a specific version tag (not `:latest`) -- CasaOS recommends this and the app store requires it.
+### Available tags
+
+| Tag | When it's created | Example |
+|-----|-------------------|---------|
+| `master` or `main` | Every push to the default branch | `ghcr.io/kthornbloom/photog:master` |
+| `sha-abc1234` | Every push (short commit SHA) | `ghcr.io/kthornbloom/photog:sha-a1b2c3d` |
+| `1.0.0`, `1.0` | When you push a `v1.0.0` git tag | `ghcr.io/kthornbloom/photog:1.0.0` |
+
+For CasaOS, use a semver tag (e.g. `:1.0.0`) when available, or `:master` for the latest build.
+
+### Creating a versioned release
+
+```bash
+git tag v1.0.0
+git push origin v1.0.0
+```
+
+GitHub Actions builds the image and tags it as `:1.0.0` and `:1.0` automatically.
 
 ---
 
@@ -23,7 +39,7 @@ Replace `YOUR_DOCKERHUB_USER` with your actual Docker Hub username. Use a specif
 
 **Docker Image**
 ```
-YOUR_DOCKERHUB_USER/photog:0.1.0
+ghcr.io/kthornbloom/photog:master
 ```
 
 **App Name:** Photog
@@ -78,17 +94,23 @@ All of this data lives in the `/cache` volume. If you ever delete that volume, P
 
 ## Updating to a new version
 
-When you've made changes to Photog and want to deploy them:
+Just push your changes to `main`/`master` (or tag a new release). GitHub Actions builds and pushes the new image to GHCR automatically.
 
-1. On your dev machine, rebuild and push with a new version tag:
+**If you're tracking `:master`:**
+
+On CasaOS, go to the Photog app settings and click **Save** (or recreate the container) to pull the latest image. CasaOS caches the image locally, so you need to trigger a re-pull.
+
+**If you're using semver tags (recommended):**
+
+1. Tag and push a new release:
    ```bash
-   docker build -t YOUR_DOCKERHUB_USER/photog:0.2.0 .
-   docker push YOUR_DOCKERHUB_USER/photog:0.2.0
+   git tag v0.2.0
+   git push origin v0.2.0
    ```
 
-2. On CasaOS, go to the Photog app settings and update the image tag to the new version (e.g. `YOUR_DOCKERHUB_USER/photog:0.2.0`), then click **Save**. CasaOS pulls the new image and restarts the container. Your cache and database carry over -- no re-indexing needed unless the database schema changed.
+2. On CasaOS, update the image tag to the new version (e.g. `ghcr.io/kthornbloom/photog:0.2.0`) and click **Save**. CasaOS pulls the new image and restarts the container.
 
-That's it. Your photo library volume and cache volume stay exactly where they are.
+Either way, your cache and database carry over -- no re-indexing needed unless the database schema changed. Your photo library volume and cache volume stay exactly where they are.
 
 ---
 
