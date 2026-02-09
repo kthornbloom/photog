@@ -186,6 +186,18 @@ function openPhoto(photo) {
   emit('open', photo, allPhotos.value, idx >= 0 ? idx : 0)
 }
 
+// Scroll the grid so a given photo is visible (called from parent during viewer navigation)
+function scrollToPhoto(photoId) {
+  const el = scrollContainer.value
+  if (!el) return
+  const item = el.querySelector(`.grid-item[data-photo-id="${photoId}"]`)
+  if (item) {
+    item.scrollIntoView({ behavior: 'smooth', block: 'center' })
+  }
+}
+
+defineExpose({ scrollToPhoto })
+
 function isVideo(photo) {
   return photo.type === 'video'
 }
@@ -448,6 +460,7 @@ function onScrubberTrackClick(e) {
         <div
           v-for="photo in group.photos"
           :key="photo.id"
+          :data-photo-id="photo.id"
           class="grid-item"
           :class="{
             'is-video': isVideo(photo),

@@ -11,6 +11,14 @@ const props = defineProps({
 const emit = defineEmits(['close', 'navigate'])
 
 const containerRef = ref(null)
+const closing = ref(false)
+
+function closeViewer() {
+  closing.value = true
+  setTimeout(() => {
+    emit('close')
+  }, 250)
+}
 
 // ---------------------------------------------------------------
 // Internal display state — decoupled from props during animation
@@ -225,7 +233,7 @@ function goNext() {
 function onKeyDown(e) {
   if (isAnimating.value) return
   switch (e.key) {
-    case 'Escape': emit('close'); break
+    case 'Escape': closeViewer(); break
     case 'ArrowLeft': goPrev(); break
     case 'ArrowRight': goNext(); break
   }
@@ -418,7 +426,7 @@ onUnmounted(() => document.removeEventListener('keydown', onKeyDown))
 </script>
 
 <template>
-  <div class="viewer-overlay" @click.self="$emit('close')">
+  <div class="viewer-overlay" :class="{ closing }" @click.self="closeViewer">
     <!-- Fuzzy background with crossfade -->
     <div class="fuzzy-bg-layer">
       <div
@@ -434,7 +442,7 @@ onUnmounted(() => document.removeEventListener('keydown', onKeyDown))
 
     <!-- Top bar -->
     <div class="viewer-top">
-      <button class="viewer-btn" @click="$emit('close')" title="Close">
+      <button class="viewer-btn" @click="closeViewer" title="Close">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
           <path d="M18 6L6 18M6 6l12 12" />
         </svg>
@@ -561,10 +569,22 @@ onUnmounted(() => document.removeEventListener('keydown', onKeyDown))
   background: var(--bg-overlay);
   display: flex;
   flex-direction: column;
-  animation: fadeIn 150ms ease;
+  animation: viewerOpen 200ms ease;
   user-select: none;
   -webkit-user-select: none;
   overflow: hidden;
+  transition: opacity 250ms ease, transform 250ms ease;
+}
+
+.viewer-overlay.closing {
+  opacity: 0;
+  transform: scale(0.95);
+  pointer-events: none;
+}
+
+@keyframes viewerOpen {
+  from { opacity: 0; transform: scale(1.03); }
+  to { opacity: 1; transform: scale(1); }
 }
 
 /* ---- Fuzzy background with crossfade ---- */

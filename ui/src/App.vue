@@ -11,6 +11,7 @@ const indexProgress = ref(null)
 const viewerPhoto = ref(null)
 const viewerPhotos = ref([])
 const viewerIndex = ref(0)
+const timelineRef = ref(null)
 
 let progressInterval = null
 
@@ -60,6 +61,8 @@ function navigateViewer(newIndex) {
   if (newIndex >= 0 && newIndex < viewerPhotos.value.length) {
     viewerIndex.value = newIndex
     viewerPhoto.value = viewerPhotos.value[newIndex]
+    // Keep the grid scrolled to the current photo so it's visible when the viewer closes
+    timelineRef.value?.scrollToPhoto(viewerPhotos.value[newIndex].id)
   }
 }
 </script>
@@ -67,7 +70,7 @@ function navigateViewer(newIndex) {
 <template>
   <AppHeader :stats="stats" />
   <IndexingBanner :progress="indexProgress" />
-  <Timeline @open="openViewer" />
+  <Timeline ref="timelineRef" @open="openViewer" />
   <PhotoViewer
     v-if="viewerPhoto"
     :photo="viewerPhoto"
