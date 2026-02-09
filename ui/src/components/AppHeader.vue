@@ -270,6 +270,7 @@ onUnmounted(() => {
 
 .setting-section {
   padding: var(--gap-md) 0;
+  border-top: 1px solid var(--border);
 }
 
 .setting-label {
