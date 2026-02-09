@@ -36,6 +36,9 @@ const zoomX = ref(0)
 const zoomY = ref(0)
 const isZoomed = computed(() => scale.value > 1.05)
 
+// Media error tracking
+const mediaError = ref(false)
+
 // Background crossfade
 const bgSrc = ref('')
 const bgNextSrc = ref('')
@@ -75,9 +78,14 @@ function bgForIndex(i) {
 
 function updateSlides(idx) {
   displayIndex.value = idx
+  mediaError.value = false
   prevSrc.value = previewSrcForIndex(idx - 1)
   currSrc.value = srcForIndex(idx)
   nextSrc.value = previewSrcForIndex(idx + 1)
+}
+
+function onMediaError() {
+  mediaError.value = true
 }
 
 const hasPrev = computed(() => displayIndex.value > 0)
@@ -165,6 +173,7 @@ function commitNav(newIndex) {
   // Step 1: Copy the incoming image src into the CENTER panel.
   //         This is the image the user is already looking at (in the next or prev slot).
   //         Visually nothing changes because the track is still off-screen.
+  mediaError.value = false
   currSrc.value = srcForIndex(newIndex)
   displayIndex.value = newIndex
 
@@ -486,13 +495,24 @@ onUnmounted(() => document.removeEventListener('keydown', onKeyDown))
       >
         <!-- Previous image (off-screen left) -->
         <div class="slide-panel slide-prev" v-if="prevSrc">
-          <img :src="prevSrc" class="viewer-img" draggable="false" />
+          <img :src="prevSrc" class="viewer-img" draggable="false" @error="e => e.target.style.display='none'" />
         </div>
 
         <!-- Current image -->
         <div class="slide-panel slide-current">
+          <!-- Broken / missing placeholder -->
+          <div v-if="mediaError" class="viewer-placeholder">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+              <rect x="3" y="3" width="18" height="18" rx="2" />
+              <circle cx="8.5" cy="8.5" r="1.5" />
+              <path d="M21 15l-5-5L5 21" />
+              <line x1="3" y1="3" x2="21" y2="21" />
+            </svg>
+            <span class="viewer-placeholder-label">File not found</span>
+          </div>
+
           <img
-            v-if="!isVideo"
+            v-if="!isVideo && !mediaError"
             :src="currSrc"
             :alt="displayPhoto?.filename"
             class="viewer-img"
@@ -503,21 +523,23 @@ onUnmounted(() => document.removeEventListener('keydown', onKeyDown))
               cursor: 'zoom-in',
             }"
             draggable="false"
+            @error="onMediaError"
           />
           <video
-            v-else
+            v-else-if="isVideo && !mediaError"
             :src="currSrc"
             :poster="thumbSrc"
             class="viewer-video"
             controls
             autoplay
             playsinline
+            @error="onMediaError"
           />
         </div>
 
         <!-- Next image (off-screen right) -->
         <div class="slide-panel slide-next" v-if="nextSrc">
-          <img :src="nextSrc" class="viewer-img" draggable="false" />
+          <img :src="nextSrc" class="viewer-img" draggable="false" @error="e => e.target.style.display='none'" />
         </div>
       </div>
     </div>
@@ -723,6 +745,7 @@ onUnmounted(() => document.removeEventListener('keydown', onKeyDown))
   transition: transform 200ms ease;
   will-change: transform;
   pointer-events: none;
+  box-shadow: 0 30px 100px #000;
 }
 
 .viewer-video {
@@ -730,6 +753,29 @@ onUnmounted(() => document.removeEventListener('keydown', onKeyDown))
   max-height: 100%;
   outline: none;
   border-radius: var(--radius-md);
+}
+
+/* ---- Missing / broken media placeholder ---- */
+.viewer-placeholder {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  color: var(--text-muted);
+  opacity: 0.45;
+  animation: fadeIn 300ms ease;
+}
+
+.viewer-placeholder svg {
+  width: 72px;
+  height: 72px;
+}
+
+.viewer-placeholder-label {
+  font-size: 0.85rem;
+  font-weight: 500;
+  letter-spacing: 0.02em;
 }
 
 /* ---- Bottom bar ---- */

@@ -16,6 +16,7 @@ const scrollContainer = ref(null)
 
 // Track loaded state per photo id
 const loadedIds = reactive(new Set())
+const errorIds = reactive(new Set())
 
 // ---------------------------------------------------------------------------
 // Month buckets — loaded once from the server for the scrubber.
@@ -155,6 +156,11 @@ function mergeGroups(newGroups) {
 
 function onImageLoad(photoId) {
   loadedIds.add(photoId)
+}
+
+function onImageError(photoId) {
+  errorIds.add(photoId)
+  loadedIds.add(photoId) // stop the shimmer
 }
 
 function onScroll(e) {
@@ -447,23 +453,34 @@ function onScrubberTrackClick(e) {
             'is-video': isVideo(photo),
             'is-loading': !loadedIds.has(photo.id),
             'is-loaded': loadedIds.has(photo.id),
+            'is-broken': errorIds.has(photo.id),
           }"
           @click="openPhoto(photo)"
           @mouseenter="onThumbEnter(photo)"
           @mouseleave="onThumbLeave"
         >
+          <!-- Broken/missing placeholder -->
+          <div v-if="errorIds.has(photo.id)" class="grid-placeholder">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+              <rect x="3" y="3" width="18" height="18" rx="2" />
+              <circle cx="8.5" cy="8.5" r="1.5" />
+              <path d="M21 15l-5-5L5 21" />
+              <line x1="3" y1="3" x2="21" y2="21" />
+            </svg>
+          </div>
+
           <img
-            v-if="hoverVideoId !== photo.id"
+            v-if="!errorIds.has(photo.id) && hoverVideoId !== photo.id"
             :src="thumbUrl(photo.id, 'sm')"
             :alt="photo.filename"
             class="grid-thumb"
             loading="lazy"
             decoding="async"
             @load="onImageLoad(photo.id)"
-            @error="onImageLoad(photo.id)"
+            @error="onImageError(photo.id)"
           />
           <video
-            v-if="isVideo(photo) && hoverVideoId === photo.id"
+            v-if="!errorIds.has(photo.id) && isVideo(photo) && hoverVideoId === photo.id"
             :src="`/api/media/${photo.id}`"
             :poster="thumbUrl(photo.id, 'sm')"
             class="grid-thumb"
@@ -472,7 +489,7 @@ function onScrubberTrackClick(e) {
             loop
             playsinline
           />
-          <div class="video-badge" v-if="isVideo(photo)">
+          <div class="video-badge" v-if="isVideo(photo) && !errorIds.has(photo.id)">
             <svg viewBox="0 0 24 24" fill="currentColor">
               <path d="M8 5v14l11-7z" />
             </svg>
@@ -657,6 +674,35 @@ function onScrubberTrackClick(e) {
 
 .grid-item.is-loaded .grid-thumb {
   opacity: 1;
+}
+
+/* Broken / missing image placeholder */
+.grid-item.is-broken {
+  background: var(--bg-surface);
+  cursor: default;
+}
+
+.grid-item.is-broken::after {
+  display: none;
+}
+
+.grid-item.is-broken:active {
+  transform: none;
+}
+
+.grid-placeholder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  color: var(--text-muted);
+  opacity: 0.35;
+}
+
+.grid-placeholder svg {
+  width: 36%;
+  height: 36%;
 }
 
 /* Video badge */

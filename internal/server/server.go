@@ -242,6 +242,14 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 		if err := s.indexer.Scan(); err != nil {
 			log.Printf("Indexing error: %v", err)
 		}
+
+		// Remove photos/videos whose files no longer exist on disk
+		removed, err := s.db.RemoveMissing()
+		if err != nil {
+			log.Printf("Error removing missing files: %v", err)
+		} else if removed > 0 {
+			log.Printf("Removed %d files that no longer exist on disk", removed)
+		}
 	}()
 
 	jsonResponse(w, map[string]string{"status": "started"})
