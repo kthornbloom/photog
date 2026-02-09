@@ -1,5 +1,5 @@
 <script setup>
-import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { mediaUrl, thumbUrl } from '../api.js'
 
 const props = defineProps({
@@ -21,22 +21,28 @@ function closeViewer() {
 }
 
 // ---------------------------------------------------------------
-// Internal display state — decoupled from props during animation
-// We control exactly what's shown in each slide panel so that
-// prop changes never cause a flash mid-transition.
+// Keyed-Slide Approach
+//
+// Render a small window of slides around the active photo. Each
+// slide is keyed by PHOTO ID so Vue never reuses a DOM element
+// for a different photo — meaning img src is NEVER mutated on a
+// live element. Navigation simply changes the track translateX.
+// Vue adds/removes slides at the edges, but slides currently in
+// view are untouched. Zero flicker, fully interruptible.
 // ---------------------------------------------------------------
-const displayIndex = ref(0)         // the index currently centered
-const isAnimating = ref(false)      // true while a slide transition is playing
 
-// The three image sources rendered in the slide panels
-const prevSrc = ref('')
-const currSrc = ref('')
-const nextSrc = ref('')
+const WINDOW = 2 // render current ± 2
 
-// Slide track
-const dragX = ref(0)
+// The photo index we're currently showing / animating to.
+// This is the single source of truth for navigation.
+const activeIndex = ref(0)
+
+// Whether CSS transition is active (off during drag)
+const animating = ref(false)
+
+// Drag state
+const dragOffset = ref(0)
 const dragging = ref(false)
-const slideTransition = ref(false)
 
 // Zoom/pan
 const scale = ref(1)
@@ -47,10 +53,13 @@ const isZoomed = computed(() => scale.value > 1.05)
 // Media error tracking
 const mediaError = ref(false)
 
-// Background crossfade
-const bgSrc = ref('')
-const bgNextSrc = ref('')
-const bgFading = ref(false)
+// Background crossfade — two permanent layers that alternate
+// Layer A and B each hold a background-image. We fade between them
+// by toggling which one is "on top" (opacity 1) vs behind (opacity 0).
+const bgLayerA = ref('')
+const bgLayerB = ref('')
+const bgShowA = ref(true)  // true = A is visible on top, false = B is on top
+let bgCurrent = 'a'        // which layer currently holds the active image
 
 // Pointer tracking
 let touchStartX = 0
@@ -72,7 +81,6 @@ function srcForIndex(i) {
   return mediaUrl(props.photos[i].id)
 }
 
-// For prev/next slide previews, videos get a thumbnail (can't render video in <img>)
 function previewSrcForIndex(i) {
   if (i < 0 || i >= (props.photos?.length ?? 0)) return ''
   if (isVideoAtIndex(i)) return thumbUrl(props.photos[i].id, 'lg')
@@ -84,24 +92,43 @@ function bgForIndex(i) {
   return thumbUrl(props.photos[i].id, 'lg')
 }
 
-function updateSlides(idx) {
-  displayIndex.value = idx
-  mediaError.value = false
-  prevSrc.value = previewSrcForIndex(idx - 1)
-  currSrc.value = srcForIndex(idx)
-  nextSrc.value = previewSrcForIndex(idx + 1)
-}
+// ---- Computed slide window ----
+// Returns an array of { index, id, src, isCenter } for indices around activeIndex.
+// Keyed by photo id — Vue will create a fresh <img> for each photo and never
+// change its src. When activeIndex changes, slides at the edges are added/removed
+// but the center one (and its neighbors) are left completely alone in the DOM.
 
-function onMediaError() {
-  mediaError.value = true
-}
+const visibleSlides = computed(() => {
+  const photos = props.photos
+  if (!photos?.length) return []
+  const center = activeIndex.value
+  const slides = []
+  for (let i = center - WINDOW; i <= center + WINDOW; i++) {
+    if (i < 0 || i >= photos.length) continue
+    slides.push({
+      index: i,
+      id: photos[i].id,
+      // Always use previewSrcForIndex for the <img> — this returns the full
+      // mediaUrl for images, or a thumbnail for videos (since videos can't
+      // render in <img>). This means the img src NEVER changes when a slide
+      // transitions between center and side positions. Videos get a separate
+      // <video> element layered on top.
+      src: previewSrcForIndex(i),
+      isCenter: i === center,
+      isVideo: photos[i].type === 'video',
+    })
+  }
+  return slides
+})
 
-const hasPrev = computed(() => displayIndex.value > 0)
-const hasNext = computed(() => displayIndex.value < (props.photos?.length ?? 0) - 1)
+// ---- Computed display info ----
 
-const isVideo = computed(() => isVideoAtIndex(displayIndex.value))
+const hasPrev = computed(() => activeIndex.value > 0)
+const hasNext = computed(() => activeIndex.value < (props.photos?.length ?? 0) - 1)
 
-const displayPhoto = computed(() => props.photos?.[displayIndex.value])
+const isVideo = computed(() => isVideoAtIndex(activeIndex.value))
+
+const displayPhoto = computed(() => props.photos?.[activeIndex.value])
 
 const photoDate = computed(() => {
   if (!displayPhoto.value?.taken_at) return ''
@@ -119,34 +146,61 @@ const thumbSrc = computed(() => {
   return thumbUrl(displayPhoto.value.id, 'lg')
 })
 
-// ---- Initialize once from props ----
-// We only use the prop for the *initial* index. After that, the viewer
-// manages displayIndex internally via commitNav(). We do NOT watch
-// props.currentIndex for changes — that would re-trigger updateSlides
-// after our own emit('navigate') round-trips through the parent,
-// causing a flash of the old image.
+// ---- Track positioning ----
+// The track holds ALL slide positions via left: index * 100%.
+// We slide it with translateX to show the active one.
+// During drag, we add the pixel drag offset.
+
+const trackStyle = computed(() => {
+  const base = -(activeIndex.value * 100)
+  if (dragging.value) {
+    // Convert drag pixel offset to a percentage of viewport for smooth combination
+    // We can't mix % and px in a single translateX, so use calc()
+    return {
+      transform: `translateX(calc(${base}% + ${dragOffset.value}px))`,
+      transition: 'none',
+    }
+  }
+  return {
+    transform: `translateX(${base}%)`,
+    transition: animating.value
+      ? 'transform 280ms cubic-bezier(0.25, 0.46, 0.45, 0.94)'
+      : 'none',
+  }
+})
+
+// ---- Initialize ----
 
 let initialized = false
 watch(() => props.currentIndex, (idx) => {
   if (!initialized) {
     initialized = true
-    updateSlides(idx)
-    updateBackground(idx)
+    activeIndex.value = idx
+    // Set initial background on layer A directly (no crossfade needed)
+    const bg = bgForIndex(idx)
+    bgLayerA.value = bg
+    bgShowA.value = true
+    bgCurrent = 'a'
   }
 }, { immediate: true })
 
 function updateBackground(idx) {
   const newBg = bgForIndex(idx)
-  if (bgSrc.value && bgSrc.value !== newBg) {
-    bgNextSrc.value = newBg
-    bgFading.value = true
-    setTimeout(() => {
-      bgSrc.value = newBg
-      bgFading.value = false
-      bgNextSrc.value = ''
-    }, 200)
+  if (!newBg) return
+
+  // Write the new image to the HIDDEN layer, then flip visibility.
+  // The CSS transition on opacity handles the crossfade.
+  // No setTimeout, no race conditions, works perfectly during rapid swiping.
+  if (bgCurrent === 'a') {
+    // A is currently visible — load new image into B, then show B
+    bgLayerB.value = newBg
+    bgShowA.value = false
+    bgCurrent = 'b'
   } else {
-    bgSrc.value = newBg
+    // B is currently visible — load new image into A, then show A
+    bgLayerA.value = newBg
+    bgShowA.value = true
+    bgCurrent = 'a'
   }
 }
 
@@ -174,64 +228,33 @@ function toggleZoom(e) {
 
 // ---- Navigation ----
 
-function commitNav(newIndex) {
-  // Called AFTER the slide animation has finished.
-  // The track is currently translated off-screen, showing the next/prev panel.
+function goTo(newIndex) {
+  const clamped = Math.max(0, Math.min((props.photos?.length ?? 1) - 1, newIndex))
+  if (clamped === activeIndex.value) return
 
-  // Step 1: Copy the incoming image src into the CENTER panel.
-  //         This is the image the user is already looking at (in the next or prev slot).
-  //         Visually nothing changes because the track is still off-screen.
   mediaError.value = false
-  currSrc.value = srcForIndex(newIndex)
-  displayIndex.value = newIndex
-
-  // Step 2: Kill the transition and snap the track back to center.
-  //         The center panel now shows the correct (new) image, so no flash.
-  setTimeout(() => {
-    slideTransition.value = false
-    dragX.value = 0
-    console.log('position reset');
-
-
-      prevSrc.value = previewSrcForIndex(newIndex - 1)
-      nextSrc.value = previewSrcForIndex(newIndex + 1)
-      isAnimating.value = false
-      console.log('images reset');
-    },195);
-
-  //updateBackground(newIndex)
+  animating.value = true
+  activeIndex.value = clamped
   resetZoom()
-  emit('navigate', newIndex)
+  updateBackground(clamped)
+  emit('navigate', clamped)
 }
 
-function animateNav(direction) {
-  // direction: -1 = go next (slide left), 1 = go prev (slide right)
-  const newIndex = displayIndex.value - direction
-  if (newIndex < 0 || newIndex >= props.photos.length) return
-  if (isAnimating.value) return
-
-  isAnimating.value = true
-  slideTransition.value = true
-
-  nextTick(() => {
-    dragX.value = direction * window.innerWidth
-  })
-
-  setTimeout(() => {
-    commitNav(newIndex)
-  }, 300)
+function onTransitionEnd(e) {
+  if (e.target !== e.currentTarget) return
+  if (e.propertyName !== 'transform') return
+  animating.value = false
 }
 
 function goPrev() {
-  if (hasPrev.value) animateNav(1)
+  if (hasPrev.value) goTo(activeIndex.value - 1)
 }
 
 function goNext() {
-  if (hasNext.value) animateNav(-1)
+  if (hasNext.value) goTo(activeIndex.value + 1)
 }
 
 function onKeyDown(e) {
-  if (isAnimating.value) return
   switch (e.key) {
     case 'Escape': closeViewer(); break
     case 'ArrowLeft': goPrev(); break
@@ -239,10 +262,15 @@ function onKeyDown(e) {
   }
 }
 
+// ---- Media error ----
+
+function onMediaError() {
+  mediaError.value = true
+}
+
 // ---- Pointer / swipe handling ----
 
 function onPointerDown(e) {
-  if (isAnimating.value) return
   if (e.pointerType === 'touch' && !e.isPrimary) return
 
   touchStartX = e.clientX
@@ -255,12 +283,19 @@ function onPointerDown(e) {
     return
   }
 
+  // If mid-animation, just kill it — the track is already at the right
+  // final position, we just stop the transition immediately.
+  if (animating.value) {
+    animating.value = false
+  }
+
   dragging.value = true
+  dragOffset.value = 0
   containerRef.value?.setPointerCapture(e.pointerId)
 }
 
 function onPointerMove(e) {
-  if (isAnimating.value || isPinching) return
+  if (isPinching) return
 
   if (isZoomDragging && isZoomed.value) {
     zoomX.value += e.clientX - touchStartX
@@ -285,37 +320,47 @@ function onPointerMove(e) {
 
   if (swipeLocked) {
     let x = dx
+    // Rubber-band at edges
     if ((!hasPrev.value && dx > 0) || (!hasNext.value && dx < 0)) {
       x = dx * 0.25
     }
-    dragX.value = x
+    dragOffset.value = x
   }
 }
 
 function onPointerUp(e) {
   if (isZoomDragging) { isZoomDragging = false; return }
   if (!dragging.value) return
-  dragging.value = false
 
-  const dx = dragX.value
+  const dx = dragOffset.value
   const vw = window.innerWidth
   const threshold = vw * 0.15
 
+  // End drag mode first — this stops the pixel-based positioning
+  dragging.value = false
+  dragOffset.value = 0
+
   if (dx > threshold && hasPrev.value) {
-    isAnimating.value = true
-    slideTransition.value = true
-    dragX.value = vw
-    setTimeout(() => commitNav(displayIndex.value - 1), 250)
+    // Navigate to previous — the track animates from current position
+    mediaError.value = false
+    animating.value = true
+    activeIndex.value = activeIndex.value - 1
+    resetZoom()
+    updateBackground(activeIndex.value)
+    emit('navigate', activeIndex.value)
   } else if (dx < -threshold && hasNext.value) {
-    isAnimating.value = true
-    slideTransition.value = true
-    dragX.value = -vw
-    setTimeout(() => commitNav(displayIndex.value + 1), 250)
+    // Navigate to next
+    mediaError.value = false
+    animating.value = true
+    activeIndex.value = activeIndex.value + 1
+    resetZoom()
+    updateBackground(activeIndex.value)
+    emit('navigate', activeIndex.value)
   } else {
-    // Snap back
-    slideTransition.value = true
-    dragX.value = 0
-    setTimeout(() => { slideTransition.value = false }, 250)
+    // Snap back — animate from wherever drag left us back to center
+    animating.value = true
+    // animating gets cleared by transitionend, or by timeout as fallback
+    setTimeout(() => { animating.value = false }, 300)
   }
 }
 
@@ -325,7 +370,7 @@ function onTouchStart(e) {
   if (e.touches.length === 2) {
     isPinching = true
     dragging.value = false
-    dragX.value = 0
+    dragOffset.value = 0
     touchStartDist = getTouchDist(e)
     touchStartScale = scale.value
   }
@@ -379,7 +424,6 @@ function downloadCurrent() {
 const canShare = ref(false)
 const sharing = ref(false)
 
-// Check for Web Share API with file support on mount
 function checkShareSupport() {
   canShare.value = !!navigator.share && !!navigator.canShare
 }
@@ -403,7 +447,6 @@ async function shareCurrent() {
         title: photo.filename,
       })
     } else {
-      // Fallback: share URL only
       await navigator.share({
         title: photo.filename,
         url: window.location.origin + url,
@@ -427,16 +470,17 @@ onUnmounted(() => document.removeEventListener('keydown', onKeyDown))
 
 <template>
   <div class="viewer-overlay" :class="{ closing }" @click.self="closeViewer">
-    <!-- Fuzzy background with crossfade -->
+    <!-- Fuzzy background — two permanent layers that crossfade via opacity -->
     <div class="fuzzy-bg-layer">
       <div
         class="fuzzy-background"
-        :style="{ backgroundImage: `url(${bgSrc})` }"
+        :class="{ 'bg-visible': bgShowA }"
+        :style="{ backgroundImage: bgLayerA ? `url(${bgLayerA})` : 'none' }"
       ></div>
       <div
-        v-if="bgFading && bgNextSrc"
-        class="fuzzy-background fuzzy-bg-enter"
-        :style="{ backgroundImage: `url(${bgNextSrc})` }"
+        class="fuzzy-background"
+        :class="{ 'bg-visible': !bgShowA }"
+        :style="{ backgroundImage: bgLayerB ? `url(${bgLayerB})` : 'none' }"
       ></div>
     </div>
 
@@ -482,7 +526,7 @@ onUnmounted(() => document.removeEventListener('keydown', onKeyDown))
       </svg>
     </button>
 
-    <!-- Slide track: prev + current + next -->
+    <!-- Slide track — keyed by photo ID, no src mutation ever -->
     <div
       class="viewer-media"
       ref="containerRef"
@@ -498,18 +542,25 @@ onUnmounted(() => document.removeEventListener('keydown', onKeyDown))
     >
       <div
         class="slide-track"
-        :class="{ 'slide-animate': slideTransition }"
-        :style="{ transform: `translateX(${dragX}px)` }"
+        :style="trackStyle"
+        @transitionend="onTransitionEnd"
       >
-        <!-- Previous image (off-screen left) -->
-        <div class="slide-panel slide-prev" v-if="prevSrc">
-          <img :src="prevSrc" class="viewer-img" draggable="false" @error="e => e.target.style.display='none'" />
-        </div>
+        <div
+          v-for="slide in visibleSlides"
+          :key="slide.id"
+          class="slide-panel"
+          :style="{ left: (slide.index * 100) + '%' }"
+        >
+          <!--
+            Every slide always renders the same <img> element — keyed by
+            photo ID, so Vue never swaps it out or changes its src.
+            The center slide gets zoom styling; side slides get none.
+            Video gets a <video> element OVER the img (img acts as poster).
+            Error placeholder only shows on center slide.
+          -->
 
-        <!-- Current image -->
-        <div class="slide-panel slide-current">
-          <!-- Broken / missing placeholder -->
-          <div v-if="mediaError" class="viewer-placeholder">
+          <!-- Error placeholder (center only) -->
+          <div v-if="slide.isCenter && mediaError" class="viewer-placeholder">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
               <rect x="3" y="3" width="18" height="18" rx="2" />
               <circle cx="8.5" cy="8.5" r="1.5" />
@@ -519,23 +570,24 @@ onUnmounted(() => document.removeEventListener('keydown', onKeyDown))
             <span class="viewer-placeholder-label">File not found</span>
           </div>
 
+          <!-- The image — always present, never conditionally destroyed -->
           <img
-            v-if="!isVideo && !mediaError"
-            :src="currSrc"
-            :alt="displayPhoto?.filename"
+            v-show="!(slide.isCenter && mediaError) && !(slide.isCenter && slide.isVideo)"
+            :src="slide.src"
+            :alt="slide.isCenter ? displayPhoto?.filename : undefined"
             class="viewer-img"
-            :style="isZoomed ? {
+            :style="slide.isCenter && isZoomed ? {
               transform: `translate(${zoomX}px, ${zoomY}px) scale(${scale})`,
               cursor: 'grab',
-            } : {
-              cursor: 'zoom-in',
-            }"
+            } : (slide.isCenter ? { cursor: 'zoom-in' } : {})"
             draggable="false"
-            @error="onMediaError"
+            @error="(e) => slide.isCenter ? onMediaError() : e.target.style.display='none'"
           />
+
+          <!-- Video overlay (center only, replaces img visually) -->
           <video
-            v-else-if="isVideo && !mediaError"
-            :src="currSrc"
+            v-if="slide.isCenter && slide.isVideo && !mediaError"
+            :src="srcForIndex(slide.index)"
             :poster="thumbSrc"
             class="viewer-video"
             controls
@@ -544,18 +596,13 @@ onUnmounted(() => document.removeEventListener('keydown', onKeyDown))
             @error="onMediaError"
           />
         </div>
-
-        <!-- Next image (off-screen right) -->
-        <div class="slide-panel slide-next" v-if="nextSrc">
-          <img :src="nextSrc" class="viewer-img" draggable="false" @error="e => e.target.style.display='none'" />
-        </div>
       </div>
     </div>
 
     <!-- Bottom bar: counter -->
     <div class="viewer-bottom">
       <span class="viewer-counter">
-        {{ displayIndex + 1 }} / {{ photos?.length ?? 0 }}
+        {{ activeIndex + 1 }} / {{ photos?.length ?? 0 }}
       </span>
     </div>
   </div>
@@ -601,16 +648,12 @@ onUnmounted(() => document.removeEventListener('keydown', onKeyDown))
   background-size: cover;
   background-position: center;
   filter: blur(30px) brightness(0.3) saturate(1.2);
-  transition: opacity 200ms ease;
+  opacity: 0;
+  transition: opacity 350ms ease;
 }
 
-.fuzzy-bg-enter {
-  animation: bgFadeIn 200ms ease forwards;
-}
-
-@keyframes bgFadeIn {
-  from { opacity: 0; }
-  to { opacity: 1; }
+.fuzzy-background.bg-visible {
+  opacity: 1;
 }
 
 /* ---- Top bar ---- */
@@ -725,7 +768,7 @@ onUnmounted(() => document.removeEventListener('keydown', onKeyDown))
   right: var(--gap-lg);
 }
 
-/* ---- Slide track ---- */
+/* ---- Slide track (keyed slides, no src mutation) ---- */
 .viewer-media {
   flex: 1;
   position: relative;
@@ -735,27 +778,19 @@ onUnmounted(() => document.removeEventListener('keydown', onKeyDown))
 }
 
 .slide-track {
-  display: flex;
-  align-items: center;
-  height: 100%;
+  position: absolute;
+  inset: 0;
   will-change: transform;
 }
 
-.slide-track.slide-animate {
-  transition: transform 100ms cubic-bezier(0.25, 0.46, 0.45, 0.94);
-}
-
 .slide-panel {
-  flex: 0 0 100%;
+  position: absolute;
+  top: 0;
   width: 100%;
   height: 100%;
   display: flex;
   align-items: center;
   justify-content: center;
-}
-
-.slide-prev {
-  margin-left: -100%;
 }
 
 .viewer-img {
