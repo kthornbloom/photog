@@ -52,8 +52,19 @@ let swipeLocked = false
 
 // ---- Helpers ----
 
+function isVideoAtIndex(i) {
+  return props.photos?.[i]?.type === 'video'
+}
+
 function srcForIndex(i) {
   if (i < 0 || i >= (props.photos?.length ?? 0)) return ''
+  return mediaUrl(props.photos[i].id)
+}
+
+// For prev/next slide previews, videos get a thumbnail (can't render video in <img>)
+function previewSrcForIndex(i) {
+  if (i < 0 || i >= (props.photos?.length ?? 0)) return ''
+  if (isVideoAtIndex(i)) return thumbUrl(props.photos[i].id, 'lg')
   return mediaUrl(props.photos[i].id)
 }
 
@@ -64,18 +75,15 @@ function bgForIndex(i) {
 
 function updateSlides(idx) {
   displayIndex.value = idx
-  prevSrc.value = srcForIndex(idx - 1)
+  prevSrc.value = previewSrcForIndex(idx - 1)
   currSrc.value = srcForIndex(idx)
-  nextSrc.value = srcForIndex(idx + 1)
+  nextSrc.value = previewSrcForIndex(idx + 1)
 }
 
 const hasPrev = computed(() => displayIndex.value > 0)
 const hasNext = computed(() => displayIndex.value < (props.photos?.length ?? 0) - 1)
 
-const isVideo = computed(() => {
-  const i = displayIndex.value
-  return props.photos?.[i]?.type === 'video'
-})
+const isVideo = computed(() => isVideoAtIndex(displayIndex.value))
 
 const displayPhoto = computed(() => props.photos?.[displayIndex.value])
 
@@ -168,8 +176,8 @@ function commitNav(newIndex) {
     console.log('position reset');
 
 
-      prevSrc.value = srcForIndex(newIndex - 1)
-      nextSrc.value = srcForIndex(newIndex + 1)
+      prevSrc.value = previewSrcForIndex(newIndex - 1)
+      nextSrc.value = previewSrcForIndex(newIndex + 1)
       isAnimating.value = false
       console.log('images reset');
     },195);
@@ -335,7 +343,68 @@ function onWheel(e) {
   if (scale.value <= 1) { zoomX.value = 0; zoomY.value = 0 }
 }
 
-onMounted(() => document.addEventListener('keydown', onKeyDown))
+// ---- Download ----
+
+function downloadCurrent() {
+  const photo = displayPhoto.value
+  if (!photo) return
+  const url = mediaUrl(photo.id)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = photo.filename || 'download'
+  document.body.appendChild(a)
+  a.click()
+  document.body.removeChild(a)
+}
+
+// ---- Share (Web Share API) ----
+
+const canShare = ref(false)
+const sharing = ref(false)
+
+// Check for Web Share API with file support on mount
+function checkShareSupport() {
+  canShare.value = !!navigator.share && !!navigator.canShare
+}
+
+async function shareCurrent() {
+  const photo = displayPhoto.value
+  if (!photo || sharing.value) return
+  sharing.value = true
+
+  try {
+    const url = mediaUrl(photo.id)
+    const response = await fetch(url)
+    const blob = await response.blob()
+    const ext = photo.filename?.split('.').pop() || (isVideo.value ? 'mp4' : 'jpg')
+    const mime = blob.type || (isVideo.value ? 'video/mp4' : 'image/jpeg')
+    const file = new File([blob], photo.filename || `photo.${ext}`, { type: mime })
+
+    if (navigator.canShare && navigator.canShare({ files: [file] })) {
+      await navigator.share({
+        files: [file],
+        title: photo.filename,
+      })
+    } else {
+      // Fallback: share URL only
+      await navigator.share({
+        title: photo.filename,
+        url: window.location.origin + url,
+      })
+    }
+  } catch (e) {
+    if (e.name !== 'AbortError') {
+      console.warn('Share failed:', e)
+    }
+  } finally {
+    sharing.value = false
+  }
+}
+
+onMounted(() => {
+  document.addEventListener('keydown', onKeyDown)
+  checkShareSupport()
+})
 onUnmounted(() => document.removeEventListener('keydown', onKeyDown))
 </script>
 
@@ -366,6 +435,22 @@ onUnmounted(() => document.removeEventListener('keydown', onKeyDown))
         <span class="viewer-date">{{ photoDate }}</span>
       </div>
       <div class="viewer-spacer"></div>
+      <div class="viewer-actions">
+        <button v-if="canShare" class="viewer-btn" @click.stop="shareCurrent" :disabled="sharing" title="Share">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8" />
+            <polyline points="16 6 12 2 8 6" />
+            <line x1="12" y1="2" x2="12" y2="15" />
+          </svg>
+        </button>
+        <button class="viewer-btn" @click.stop="downloadCurrent" title="Download">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+            <polyline points="7 10 12 15 17 10" />
+            <line x1="12" y1="15" x2="12" y2="3" />
+          </svg>
+        </button>
+      </div>
     </div>
 
     <!-- Navigation arrows -->
@@ -547,6 +632,17 @@ onUnmounted(() => document.removeEventListener('keydown', onKeyDown))
 
 .viewer-spacer {
   flex: 1;
+}
+
+.viewer-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--gap-md);
+}
+
+.viewer-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
 }
 
 /* ---- Nav arrows ---- */

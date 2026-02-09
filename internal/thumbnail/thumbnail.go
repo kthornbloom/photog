@@ -17,8 +17,13 @@ import (
 
 	"github.com/chai2010/webp"
 	"github.com/disintegration/imaging"
+	"github.com/rwcarlsen/goexif/exif"
 	"photog/internal/config"
 )
+
+// thumbVersion is embedded into cache filenames. Bump this to invalidate
+// all existing cached thumbnails (e.g. after fixing orientation bugs).
+const thumbVersion = "v2"
 
 // Generator handles thumbnail creation and caching.
 type Generator struct {
@@ -182,8 +187,9 @@ func (g *Generator) ThumbPath(photoPath string, size Size) string {
 func (g *Generator) thumbPath(photoPath string, size Size) string {
 	hash := sha256.Sum256([]byte(photoPath))
 	hashStr := fmt.Sprintf("%x", hash[:16]) // 32 char hex
-	// Organize into subdirectories for filesystem performance
-	return filepath.Join(g.cacheDir, hashStr[:2], hashStr[2:4], fmt.Sprintf("%s_%s.webp", hashStr, size))
+	// Organize into subdirectories for filesystem performance.
+	// thumbVersion is included so bumping it invalidates old caches.
+	return filepath.Join(g.cacheDir, hashStr[:2], hashStr[2:4], fmt.Sprintf("%s_%s_%s.webp", hashStr, size, thumbVersion))
 }
 
 func (g *Generator) maxDimension(size Size) int {
@@ -244,15 +250,69 @@ func openImage(path string) (image.Image, error) {
 
 	ext := strings.ToLower(filepath.Ext(path))
 
+	var img image.Image
 	switch ext {
 	case ".jpg", ".jpeg":
-		return jpeg.Decode(f)
+		img, err = jpeg.Decode(f)
 	case ".png":
-		return png.Decode(f)
+		img, err = png.Decode(f)
 	default:
-		// Try generic decode
-		img, _, err := image.Decode(f)
-		return img, err
+		img, _, err = image.Decode(f)
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	// Apply EXIF orientation for JPEGs (the fallback path doesn't get
+	// imaging.AutoOrientation, so we handle it manually here).
+	if ext == ".jpg" || ext == ".jpeg" {
+		img = applyExifOrientation(path, img)
+	}
+
+	return img, nil
+}
+
+// applyExifOrientation reads the EXIF orientation tag from a JPEG file
+// and returns a correctly oriented image.
+func applyExifOrientation(path string, img image.Image) image.Image {
+	f, err := os.Open(path)
+	if err != nil {
+		return img
+	}
+	defer f.Close()
+
+	x, err := exif.Decode(f)
+	if err != nil {
+		return img
+	}
+
+	orient, err := x.Get(exif.Orientation)
+	if err != nil {
+		return img // no orientation tag — image is upright
+	}
+
+	orientVal, err := orient.Int(0)
+	if err != nil {
+		return img
+	}
+
+	switch orientVal {
+	case 2:
+		return imaging.FlipH(img)
+	case 3:
+		return imaging.Rotate180(img)
+	case 4:
+		return imaging.FlipV(img)
+	case 5:
+		return imaging.Transpose(img)
+	case 6:
+		return imaging.Rotate270(img)
+	case 7:
+		return imaging.Transverse(img)
+	case 8:
+		return imaging.Rotate90(img)
+	default:
+		return img // orientation 1 = normal
 	}
 }
 
