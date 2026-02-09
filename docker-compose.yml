@@ -20,6 +20,8 @@ services:
       TZ: $TZ
       PHOTOG_PHOTO_PATHS: /photos
       PHOTOG_CACHE_DIR: /cache
+    labels:
+      com.centurylinklabs.watchtower.enable: "true"
     x-casaos:
       envs:
         - container: PHOTOG_PHOTO_PATHS
@@ -39,6 +41,27 @@ services:
         - container: /cache
           description:
             en_US: Persistent storage for the SQLite index and generated thumbnails.
+
+  watchtower:
+    image: containrrr/watchtower:latest
+    restart: unless-stopped
+    volumes:
+      - type: bind
+        source: /var/run/docker.sock
+        target: /var/run/docker.sock
+    environment:
+      TZ: $TZ
+      WATCHTOWER_CLEANUP: "true"
+      WATCHTOWER_LABEL_ENABLE: "true"
+      WATCHTOWER_POLL_INTERVAL: "3600"
+    x-casaos:
+      envs:
+        - container: WATCHTOWER_POLL_INTERVAL
+          description:
+            en_US: How often (in seconds) to check for image updates. Default is 3600 (1 hour).
+        - container: WATCHTOWER_CLEANUP
+          description:
+            en_US: Remove old images after updating. Set to "true" to save disk space.
 
 x-casaos:
   architectures:
@@ -68,6 +91,9 @@ x-casaos:
 
         On first launch, Photog indexes your library automatically. This takes 1-2 minutes
         for ~50,000 files. Thumbnails are generated on demand as you scroll.
+
+        Updates are automatic! The bundled Watchtower container checks for new images every
+        hour and seamlessly restarts Photog when an update is available.
   scheme: http
   index: /
   port_map: "8080"

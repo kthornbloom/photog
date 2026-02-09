@@ -21,7 +21,7 @@ Every push to `master` automatically creates an incrementing version tag (`v0.0.
 | `sha-abc1234` | Every push (short commit SHA) | `ghcr.io/kthornbloom/photog:sha-a1b2c3d` |
 | `1.0.0`, `1.0` | When you manually push a `v1.0.0` git tag | `ghcr.io/kthornbloom/photog:1.0.0` |
 
-For CasaOS, use `:latest` for the simplest setup. CasaOS's "Check then update" will detect new versions automatically since each build gets a unique tag.
+For CasaOS, use `:latest` for the simplest setup. The compose file includes a Watchtower sidecar that automatically detects and pulls new images (see "Automatic updates" below).
 
 ---
 
@@ -90,12 +90,27 @@ All of this data lives in the `/cache` volume. If you ever delete that volume, P
 
 Just push your changes to `main`/`master` (or tag a new release). GitHub Actions builds and pushes the new image to GHCR automatically.
 
-Every push to `master` automatically creates a new version tag and pushes a fresh image. To update on CasaOS:
+### Automatic updates (Watchtower)
 
-1. Click the three-dot menu on the Photog tile
-2. Click **Check then update**
+The compose file includes a [Watchtower](https://containrrr.dev/watchtower/) sidecar container that automatically checks the registry for new images every hour (configurable via `WATCHTOWER_POLL_INTERVAL` in seconds). When a new image is detected, Watchtower:
 
-CasaOS detects the new version and pulls it. Your cache and database carry over -- no re-indexing needed unless the database schema changed. Your photo library volume and cache volume stay exactly where they are.
+1. Pulls the new image
+2. Gracefully stops the running Photog container
+3. Restarts it with the new image (same settings/volumes)
+4. Removes the old image to save disk space
+
+No manual intervention required. Your cache and database carry over -- no re-indexing needed unless the database schema changed.
+
+### Manual updates
+
+If you prefer to update manually, or don't want to wait for the next poll:
+
+1. SSH into your CasaOS machine
+2. Run: `docker compose -f /path/to/docker-compose.yml pull && docker compose -f /path/to/docker-compose.yml up -d`
+
+Or simply restart the Watchtower container from CasaOS to trigger an immediate check.
+
+> **Note:** CasaOS's built-in "Check then update" button does not reliably detect changes to the `:latest` tag for custom-installed apps. This is a known CasaOS limitation, which is why we bundle Watchtower.
 
 ---
 
