@@ -43,8 +43,6 @@ services:
 x-casaos:
   architectures:
     - amd64
-    - arm64
-    - arm
   main: photog
   author: kthor
   category: Media
