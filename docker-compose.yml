@@ -53,7 +53,7 @@ services:
       TZ: $TZ
       WATCHTOWER_CLEANUP: "true"
       WATCHTOWER_LABEL_ENABLE: "true"
-      WATCHTOWER_POLL_INTERVAL: "3600"
+      WATCHTOWER_POLL_INTERVAL: "900"
     x-casaos:
       envs:
         - container: WATCHTOWER_POLL_INTERVAL
