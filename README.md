@@ -1,13 +1,6 @@
 Local Dev: 
 
-
-cd c:\Sites\photog\ui && npm run build 2>&1cd c:\Sites\photog\ui
-node mock-server.js
-
-
-cd c:\Sites\photog\ui
-$env:API_TARGET="http://localhost:3001"
-npx vite
+.\dev.ps1
 
 
 Build a complete, production-ready, self-hosted photo viewer app optimized for CasaOS (Docker-first) with these exact requirements:

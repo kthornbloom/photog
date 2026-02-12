@@ -613,8 +613,8 @@ function onScrubberTrackClick(e) {
   display: flex;
   align-items: baseline;
   gap: var(--gap-md);
-  padding: var(--gap-sm) var(--gap-sm);
-  background: var(--bg-primary);
+  padding: 1rem;
+  background: rgba(0,0,0,.5);
   /* Glass effect for sticky header */
   backdrop-filter: blur(12px);
   -webkit-backdrop-filter: blur(12px);
@@ -647,6 +647,7 @@ function onScrubberTrackClick(e) {
   border-radius: var(--radius-sm);
   cursor: pointer;
   background: var(--bg-surface);
+  box-shadow: 0 1px 6px #000, 0 2px 50px #2f2f2f;
 }
 
 .grid-item::after {
@@ -770,7 +771,7 @@ function onScrubberTrackClick(e) {
 @media (min-width: 768px) {
   .photo-grid {
     grid-template-columns: repeat(auto-fill, minmax(var(--thumb-max), 1fr));
-    gap: var(--gap-sm);
+    gap: 1rem;
   }
 }
 

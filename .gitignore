@@ -29,3 +29,7 @@ Thumbs.db
 # Env
 .env
 .env.local
+
+# Local dev config
+config.dev.yaml
+dev.ps1

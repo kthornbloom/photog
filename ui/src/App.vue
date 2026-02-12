@@ -4,16 +4,19 @@ import AppHeader from './components/AppHeader.vue'
 import Timeline from './components/Timeline.vue'
 import PhotoViewer from './components/PhotoViewer.vue'
 import IndexingBanner from './components/IndexingBanner.vue'
-import { fetchStats, fetchIndexProgress } from './api.js'
+import Memories from './components/Memories.vue'
+import { fetchStats, fetchIndexProgress, fetchPregenProgress } from './api.js'
 
 const stats = ref(null)
 const indexProgress = ref(null)
+const pregenProgress = ref(null)
 const viewerPhoto = ref(null)
 const viewerPhotos = ref([])
 const viewerIndex = ref(0)
 const timelineRef = ref(null)
 
 let progressInterval = null
+let pregenInterval = null
 
 onMounted(async () => {
   try {
@@ -22,10 +25,12 @@ onMounted(async () => {
     console.warn('Could not load stats:', e)
   }
   pollProgress()
+  pollPregen()
 })
 
 onUnmounted(() => {
   if (progressInterval) clearInterval(progressInterval)
+  if (pregenInterval) clearInterval(pregenInterval)
 })
 
 async function pollProgress() {
@@ -41,9 +46,32 @@ async function pollProgress() {
           clearInterval(progressInterval)
           progressInterval = null
           stats.value = await fetchStats()
+          // Indexing just finished — pregen will start soon, begin polling it
+          pollPregen()
         }
       } catch { /* ignore */ }
     }, 2000)
+  }
+}
+
+async function pollPregen() {
+  try {
+    pregenProgress.value = await fetchPregenProgress()
+  } catch { /* ignore */ }
+
+  // If already polling, don't start another interval
+  if (pregenInterval) return
+
+  if (pregenProgress.value?.running) {
+    pregenInterval = setInterval(async () => {
+      try {
+        pregenProgress.value = await fetchPregenProgress()
+        if (!pregenProgress.value.running) {
+          clearInterval(pregenInterval)
+          pregenInterval = null
+        }
+      } catch { /* ignore */ }
+    }, 3000)
   }
 }
 
@@ -69,7 +97,8 @@ function navigateViewer(newIndex) {
 
 <template>
   <AppHeader :stats="stats" />
-  <IndexingBanner :progress="indexProgress" />
+  <IndexingBanner :progress="indexProgress" :pregen-progress="pregenProgress" />
+  <Memories @open="openViewer" />
   <Timeline ref="timelineRef" @open="openViewer" />
   <PhotoViewer
     v-if="viewerPhoto"

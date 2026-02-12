@@ -1,6 +1,8 @@
 package thumbnail
 
 import (
+	"bufio"
+	"context"
 	"crypto/sha256"
 	"fmt"
 	"image"
@@ -21,6 +23,9 @@ import (
 	"photog/internal/config"
 )
 
+// ffmpegTimeout is the maximum time allowed for a single ffmpeg invocation.
+const ffmpegTimeout = 60 * time.Second
+
 // thumbVersion is embedded into cache filenames. Bump this to invalidate
 // all existing cached thumbnails (e.g. after fixing orientation bugs).
 const thumbVersion = "v2"
@@ -32,6 +37,13 @@ type Generator struct {
 	// ffmpeg availability (cached)
 	ffmpegOnce sync.Once
 	ffmpegPath string
+	// failure cache: tracks files that failed thumbnail generation so we
+	// don't waste CPU retrying them every boot. Persisted to disk.
+	failMu    sync.RWMutex
+	failCache map[string]bool // key = source file path
+	// pregen progress tracking (readable from API)
+	pregenMu       sync.RWMutex
+	pregenProgress PregenProgress
 }
 
 // Size represents a thumbnail size preset.
@@ -45,11 +57,15 @@ const (
 
 // PregenProgress tracks background thumbnail pre-generation state.
 type PregenProgress struct {
-	Running   bool  `json:"running"`
-	Total     int64 `json:"total"`
-	Generated int64 `json:"generated"`
-	Skipped   int64 `json:"skipped"`
-	Errors    int64 `json:"errors"`
+	Running      bool    `json:"running"`
+	Total        int64   `json:"total"`
+	Generated    int64   `json:"generated"`
+	Skipped      int64   `json:"skipped"`
+	Errors       int64   `json:"errors"`
+	ItemsPerSec  float64 `json:"items_per_sec"`
+	EtaSeconds   int64   `json:"eta_seconds"`
+	StartedAt    string  `json:"started_at,omitempty"`
+	FinishedAt   string  `json:"finished_at,omitempty"`
 }
 
 // New creates a thumbnail generator.
@@ -59,10 +75,79 @@ func New(cacheDir string, cfg config.ThumbnailConfig) (*Generator, error) {
 		return nil, fmt.Errorf("create thumb dir: %w", err)
 	}
 
-	return &Generator{
-		cacheDir: thumbDir,
-		config:   cfg,
-	}, nil
+	g := &Generator{
+		cacheDir:  thumbDir,
+		config:    cfg,
+		failCache: make(map[string]bool),
+	}
+	g.loadFailCache()
+	return g, nil
+}
+
+// failCachePath returns the path to the on-disk failure cache file.
+func (g *Generator) failCachePath() string {
+	return filepath.Join(g.cacheDir, "fail_cache.txt")
+}
+
+// loadFailCache reads the failure cache from disk (one path per line).
+func (g *Generator) loadFailCache() {
+	f, err := os.Open(g.failCachePath())
+	if err != nil {
+		return // file doesn't exist yet, that's fine
+	}
+	defer f.Close()
+
+	scanner := bufio.NewScanner(f)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line != "" {
+			g.failCache[line] = true
+		}
+	}
+	if len(g.failCache) > 0 {
+		log.Printf("Thumbnail: loaded %d entries from failure cache", len(g.failCache))
+	}
+}
+
+// recordFailure adds a path to the failure cache and persists it.
+func (g *Generator) recordFailure(path string) {
+	g.failMu.Lock()
+	defer g.failMu.Unlock()
+
+	if g.failCache[path] {
+		return // already recorded
+	}
+	g.failCache[path] = true
+
+	// Append to disk file
+	f, err := os.OpenFile(g.failCachePath(), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		log.Printf("Thumbnail: failed to write failure cache: %v", err)
+		return
+	}
+	defer f.Close()
+	fmt.Fprintln(f, path)
+}
+
+// hasFailed returns true if the path is in the failure cache.
+func (g *Generator) hasFailed(path string) bool {
+	g.failMu.RLock()
+	defer g.failMu.RUnlock()
+	return g.failCache[path]
+}
+
+// GetPregenProgress returns the current thumbnail pre-generation progress.
+func (g *Generator) GetPregenProgress() PregenProgress {
+	g.pregenMu.RLock()
+	defer g.pregenMu.RUnlock()
+	return g.pregenProgress
+}
+
+// updatePregenProgress safely updates the pregen progress state.
+func (g *Generator) updatePregenProgress(fn func(p *PregenProgress)) {
+	g.pregenMu.Lock()
+	defer g.pregenMu.Unlock()
+	fn(&g.pregenProgress)
 }
 
 // GetOrCreate returns the path to a cached thumbnail, generating it if needed.
@@ -110,7 +195,11 @@ func (g *Generator) GetOrCreateVideo(videoPath string, size Size) (string, error
 	maxDim := g.maxDimension(size)
 	scaleFilter := fmt.Sprintf("scale='min(%d,iw)':'min(%d,ih)':force_original_aspect_ratio=decrease", maxDim, maxDim)
 
-	cmd := exec.Command(ffmpeg,
+	ctx, cancel := context.WithTimeout(context.Background(), ffmpegTimeout)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx,
+		ffmpeg,
 		"-i", videoPath,
 		"-ss", "1",        // seek to 1 second
 		"-frames:v", "1",  // extract single frame
@@ -119,8 +208,15 @@ func (g *Generator) GetOrCreateVideo(videoPath string, size Size) (string, error
 		tmpJpg,
 	)
 	if out, err := cmd.CombinedOutput(); err != nil {
+		if ctx.Err() == context.DeadlineExceeded {
+			return "", fmt.Errorf("ffmpeg timed out after %s for %s", ffmpegTimeout, videoPath)
+		}
 		// Retry at 0 seconds (video might be < 1 second)
-		cmd2 := exec.Command(ffmpeg,
+		ctx2, cancel2 := context.WithTimeout(context.Background(), ffmpegTimeout)
+		defer cancel2()
+
+		cmd2 := exec.CommandContext(ctx2,
+			ffmpeg,
 			"-i", videoPath,
 			"-frames:v", "1",
 			"-vf", scaleFilter,
@@ -128,6 +224,9 @@ func (g *Generator) GetOrCreateVideo(videoPath string, size Size) (string, error
 			tmpJpg,
 		)
 		if out2, err2 := cmd2.CombinedOutput(); err2 != nil {
+			if ctx2.Err() == context.DeadlineExceeded {
+				return "", fmt.Errorf("ffmpeg timed out after %s for %s", ffmpegTimeout, videoPath)
+			}
 			return "", fmt.Errorf("ffmpeg error: %v: %s / %s", err, string(out), string(out2))
 		}
 	}
@@ -328,8 +427,20 @@ type PregenResult struct {
 // The stop channel can be closed to abort early.
 func (g *Generator) PregenSmallThumbnails(items []PregenItem, batchSize int, batchDelay time.Duration, stop <-chan struct{}, progress *atomic.Int64) PregenResult {
 	var result PregenResult
+	total := len(items)
+	startTime := time.Now()
+	lastLogTime := startTime
 
-	for i := 0; i < len(items); i += batchSize {
+	// Initialize pregen progress for API consumers
+	g.updatePregenProgress(func(p *PregenProgress) {
+		*p = PregenProgress{
+			Running:   true,
+			Total:     int64(total),
+			StartedAt: startTime.Format(time.RFC3339),
+		}
+	})
+
+	for i := 0; i < total; i += batchSize {
 		// Check for stop signal
 		select {
 		case <-stop:
@@ -338,12 +449,21 @@ func (g *Generator) PregenSmallThumbnails(items []PregenItem, batchSize int, bat
 		}
 
 		end := i + batchSize
-		if end > len(items) {
-			end = len(items)
+		if end > total {
+			end = total
 		}
 
 		batch := items[i:end]
 		for _, item := range batch {
+			// Skip items that previously failed (persisted across restarts)
+			if g.hasFailed(item.Path) {
+				result.Skipped++
+				if progress != nil {
+					progress.Add(1)
+				}
+				continue
+			}
+
 			// Check if already cached
 			if g.Exists(item.Path, Small) {
 				result.Skipped++
@@ -370,6 +490,7 @@ func (g *Generator) PregenSmallThumbnails(items []PregenItem, batchSize int, bat
 
 			if err != nil {
 				result.Errors++
+				g.recordFailure(item.Path)
 				log.Printf("Pregen: error generating thumb for %s: %v", item.Path, err)
 			} else {
 				result.Generated++
@@ -379,8 +500,41 @@ func (g *Generator) PregenSmallThumbnails(items []PregenItem, batchSize int, bat
 			}
 		}
 
+		// Update progress for API and log periodically
+		processed := result.Generated + result.Skipped + result.Errors
+		elapsed := time.Since(startTime)
+		rate := float64(0)
+		etaSeconds := int64(0)
+		if elapsed.Seconds() > 0 {
+			rate = float64(processed) / elapsed.Seconds()
+		}
+		if rate > 0 {
+			etaSeconds = int64(float64(int64(total)-processed) / rate)
+		}
+
+		// Update API-visible progress every batch
+		g.updatePregenProgress(func(p *PregenProgress) {
+			p.Generated = result.Generated
+			p.Skipped = result.Skipped
+			p.Errors = result.Errors
+			p.ItemsPerSec = rate
+			p.EtaSeconds = etaSeconds
+		})
+
+		// Log to stdout periodically (every 30 seconds or every 500 items)
+		if time.Since(lastLogTime) >= 30*time.Second || processed%500 == 0 {
+			log.Printf("Pregen: %d/%d (%.1f%%) — generated %d, skipped %d, errors %d — %.1f items/sec, ~%s remaining",
+				processed, total,
+				float64(processed)/float64(total)*100,
+				result.Generated, result.Skipped, result.Errors,
+				rate,
+				(time.Duration(etaSeconds) * time.Second).Truncate(time.Second),
+			)
+			lastLogTime = time.Now()
+		}
+
 		// Sleep between batches to avoid resource abuse
-		if end < len(items) {
+		if end < total {
 			select {
 			case <-stop:
 				return result
@@ -388,6 +542,19 @@ func (g *Generator) PregenSmallThumbnails(items []PregenItem, batchSize int, bat
 			}
 		}
 	}
+
+	// Mark pregen as complete
+	g.updatePregenProgress(func(p *PregenProgress) {
+		p.Running = false
+		p.Generated = result.Generated
+		p.Skipped = result.Skipped
+		p.Errors = result.Errors
+		p.FinishedAt = time.Now().Format(time.RFC3339)
+		if elapsed := time.Since(startTime).Seconds(); elapsed > 0 {
+			p.ItemsPerSec = float64(result.Generated+result.Skipped+result.Errors) / elapsed
+		}
+		p.EtaSeconds = 0
+	})
 
 	return result
 }

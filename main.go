@@ -62,6 +62,14 @@ func main() {
 				log.Printf("Initial indexing error: %v", err)
 			}
 
+			// Clean out any dotfiles/hidden files (.pending-*, etc.) that were
+			// indexed by older versions. They can never produce valid thumbnails.
+			if removed, err := db.RemoveDotfiles(); err != nil {
+				log.Printf("Error cleaning dotfiles from index: %v", err)
+			} else if removed > 0 {
+				log.Printf("Cleaned %d dotfiles/hidden files from index", removed)
+			}
+
 			// After indexing completes, start background thumbnail pre-generation
 			startPregen(db, thumbGen, pregenStop)
 		}()

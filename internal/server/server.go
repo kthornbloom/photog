@@ -44,12 +44,14 @@ func (s *Server) routes() {
 	// API routes
 	s.mux.HandleFunc("/api/timeline/months", s.handleTimelineMonths)
 	s.mux.HandleFunc("/api/timeline", s.handleTimeline)
+	s.mux.HandleFunc("/api/memories", s.handleMemories)
 	s.mux.HandleFunc("/api/photo/", s.handlePhoto)
 	s.mux.HandleFunc("/api/thumb/", s.handleThumb)
 	s.mux.HandleFunc("/api/media/", s.handleMedia)
 	s.mux.HandleFunc("/api/stats", s.handleStats)
 	s.mux.HandleFunc("/api/index", s.handleIndex)
 	s.mux.HandleFunc("/api/index/progress", s.handleIndexProgress)
+	s.mux.HandleFunc("/api/pregen/progress", s.handlePregenProgress)
 
 	// Static file serving (embedded frontend in production)
 	s.mux.HandleFunc("/", s.handleFrontend)
@@ -93,6 +95,17 @@ func (s *Server) handleTimeline(w http.ResponseWriter, r *http.Request) {
 	}
 
 	jsonResponse(w, timeline)
+}
+
+// handleMemories returns random photos from the past at 5-year intervals.
+func (s *Server) handleMemories(w http.ResponseWriter, r *http.Request) {
+	memories, err := s.db.GetMemories(5)
+	if err != nil {
+		jsonError(w, "Failed to fetch memories", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Cache-Control", "public, max-age=300") // 5 min cache
+	jsonResponse(w, map[string]interface{}{"photos": memories})
 }
 
 // handleTimelineMonths returns the lightweight month-bucket list for the scrubber.
@@ -258,6 +271,11 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 // handleIndexProgress returns current indexing progress.
 func (s *Server) handleIndexProgress(w http.ResponseWriter, r *http.Request) {
 	jsonResponse(w, s.indexer.GetProgress())
+}
+
+// handlePregenProgress returns current thumbnail pre-generation progress.
+func (s *Server) handlePregenProgress(w http.ResponseWriter, r *http.Request) {
+	jsonResponse(w, s.thumbs.GetPregenProgress())
 }
 
 // handleFrontend serves the embedded frontend or proxies in dev mode.

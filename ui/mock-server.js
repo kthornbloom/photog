@@ -25,8 +25,8 @@ function generatePhotos(count = 300) {
   const now = new Date()
 
   for (let i = 1; i <= count; i++) {
-    // Spread photos across the last 3 years
-    const daysAgo = Math.floor(Math.random() * 1095) // ~3 years
+    // Spread photos across the last 15 years so memories (5+ years) have data
+    const daysAgo = Math.floor(Math.random() * 5475) // ~15 years
     const date = new Date(now)
     date.setDate(date.getDate() - daysAgo)
     date.setHours(Math.floor(Math.random() * 14) + 7) // 7am-9pm
@@ -117,8 +117,12 @@ const server = http.createServer((req, res) => {
   const path = url.pathname
 
   // JSON helper
-  function json(data) {
-    res.setHeader('Content-Type', 'application/json')
+  function json(data, statusCode) {
+    if (statusCode) {
+      res.writeHead(statusCode, { 'Content-Type': 'application/json' })
+    } else {
+      res.setHeader('Content-Type', 'application/json')
+    }
     res.end(JSON.stringify(data))
   }
 
@@ -164,8 +168,7 @@ const server = http.createServer((req, res) => {
     const id = parseInt(path.split('/').pop())
     const photo = ALL_PHOTOS.find(p => p.id === id)
     if (photo) return json(photo)
-    res.writeHead(404)
-    return json({ error: 'Not found' })
+    return json({ error: 'Not found' }, 404)
   }
 
   // Route: /api/thumb/:id/:size — redirect to picsum placeholder
@@ -184,7 +187,7 @@ const server = http.createServer((req, res) => {
   if (path.startsWith('/api/media/')) {
     const id = parseInt(path.split('/').pop())
     const photo = ALL_PHOTOS.find(p => p.id === id)
-    if (!photo) { res.writeHead(404); return json({ error: 'Not found' }) }
+    if (!photo) { return json({ error: 'Not found' }, 404) }
 
     if (photo.type === 'video') {
       // Redirect to a small sample video
@@ -210,6 +213,39 @@ const server = http.createServer((req, res) => {
     return json({ years, oldest_year: years[years.length - 1]?.year, newest_year: years[0]?.year })
   }
 
+  // Route: /api/memories — photos from 5-year intervals (5, 10, 15 years ago)
+  if (path === '/api/memories') {
+    const now = new Date()
+    const currentYear = now.getFullYear()
+    const memoryPhotos = []
+    // Match the Go backend: strict 5-year intervals only
+    for (let i = 1; i <= 5; i++) {
+      const targetYear = currentYear - (i * 5)
+      const matches = ALL_PHOTOS.filter(p => {
+        const d = new Date(p.taken_at)
+        return d.getFullYear() === targetYear && p.type === 'image'
+      })
+      if (matches.length > 0) {
+        // Pick one random photo per interval (same as Go backend)
+        const pick = matches[Math.floor(Math.random() * matches.length)]
+        memoryPhotos.push(pick)
+      }
+    }
+    return json({ photos: memoryPhotos })
+  }
+
+  // Route: /api/pregen/progress
+  if (path === '/api/pregen/progress') {
+    return json({
+      running: false,
+      total: ALL_PHOTOS.length,
+      generated: ALL_PHOTOS.length,
+      skipped: 0,
+      errors: 0,
+      eta_seconds: 0,
+    })
+  }
+
   // Route: /api/index/progress
   if (path === '/api/index/progress') {
     return json({
@@ -229,8 +265,7 @@ const server = http.createServer((req, res) => {
     return json({ status: 'complete' })
   }
 
-  res.writeHead(404)
-  json({ error: 'Not found' })
+  json({ error: 'Not found' }, 404)
 })
 
 server.listen(PORT, () => {

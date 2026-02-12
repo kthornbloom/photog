@@ -29,6 +29,20 @@ var (
 	}
 )
 
+// shouldSkipFile returns true for files that should never be indexed:
+// hidden/dot files, temporary sync files (.pending-*, .trashed-*, etc.),
+// macOS resource forks, and thumbnail database files.
+func shouldSkipFile(name string) bool {
+	if strings.HasPrefix(name, ".") {
+		return true
+	}
+	lower := strings.ToLower(name)
+	if lower == "thumbs.db" || lower == "desktop.ini" || lower == ".ds_store" {
+		return true
+	}
+	return false
+}
+
 // Indexer scans photo directories and populates the database.
 type Indexer struct {
 	db       *database.DB
@@ -105,6 +119,9 @@ func (idx *Indexer) Scan() error {
 			if err != nil || d.IsDir() {
 				return nil
 			}
+			if shouldSkipFile(d.Name()) {
+				return nil
+			}
 			ext := strings.ToLower(filepath.Ext(path))
 			if imageExts[ext] || videoExts[ext] {
 				totalFiles++
@@ -123,6 +140,10 @@ func (idx *Indexer) Scan() error {
 				return nil // skip errors, keep going
 			}
 			if d.IsDir() {
+				return nil
+			}
+
+			if shouldSkipFile(d.Name()) {
 				return nil
 			}
 

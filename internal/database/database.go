@@ -305,6 +305,59 @@ func (db *DB) GetAllPaths() ([]struct{ Path, MediaType string }, error) {
 	return items, nil
 }
 
+// GetMemories returns random photos from the past at 5-year intervals
+// (e.g. 5, 10, 15, 20 years ago). Each interval contributes at most one photo.
+// Returns up to maxCount photos, ordered oldest first.
+func (db *DB) GetMemories(maxCount int) ([]*models.Photo, error) {
+	if maxCount <= 0 {
+		maxCount = 5
+	}
+
+	now := time.Now()
+	currentYear := now.Year()
+	var memories []*models.Photo
+
+	for i := 1; i <= maxCount; i++ {
+		targetYear := currentYear - (i * 5)
+		if targetYear < 1900 {
+			break
+		}
+
+		start := time.Date(targetYear, 1, 1, 0, 0, 0, 0, time.UTC)
+		end := time.Date(targetYear, 12, 31, 23, 59, 59, 999999999, time.UTC)
+
+		row := db.conn.QueryRow(`
+			SELECT id, path, filename, taken_at, width, height, orientation, media_type, file_size, duration, thumb_path, indexed_at
+			FROM photos
+			WHERE taken_at BETWEEN ? AND ?
+			ORDER BY RANDOM()
+			LIMIT 1
+		`, start, end)
+
+		p := &models.Photo{}
+		if err := row.Scan(&p.ID, &p.Path, &p.Filename, &p.TakenAt, &p.Width, &p.Height, &p.Orientation, &p.MediaType, &p.FileSize, &p.Duration, &p.ThumbPath, &p.IndexedAt); err != nil {
+			if err == sql.ErrNoRows {
+				continue
+			}
+			return nil, err
+		}
+		memories = append(memories, p)
+	}
+
+	return memories, nil
+}
+
+// RemoveDotfiles deletes indexed entries whose filename starts with a dot
+// (hidden files, .pending-* sync temp files, etc.). These should never have
+// been indexed and will never produce valid thumbnails.
+func (db *DB) RemoveDotfiles() (int64, error) {
+	result, err := db.conn.Exec(`DELETE FROM photos WHERE filename LIKE '.%'`)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 // Close closes the database connection.
 func (db *DB) Close() error {
 	return db.conn.Close()

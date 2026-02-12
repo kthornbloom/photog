@@ -29,6 +29,13 @@ export function fetchTimelineMonths() {
 }
 
 /**
+ * Fetch "memories" — random photos from the past at 5-year intervals (e.g. 5, 10, 15 years ago).
+ */
+export function fetchMemories() {
+  return request('/memories')
+}
+
+/**
  * Fetch a single photo's metadata.
  */
 export function fetchPhoto(id) {
@@ -54,6 +61,13 @@ export function triggerIndex() {
  */
 export function fetchIndexProgress() {
   return request('/index/progress')
+}
+
+/**
+ * Get current thumbnail pre-generation progress.
+ */
+export function fetchPregenProgress() {
+  return request('/pregen/progress')
 }
 
 /**

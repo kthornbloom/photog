@@ -1,16 +1,19 @@
 .PHONY: dev dev-backend dev-frontend build clean docker
 
-# Development: run backend and frontend separately
-dev-backend:
-	go run . --config=config.yaml
+# Development: run mock API + frontend concurrently with one command
+dev:
+	@echo Starting mock API (port 3001) and Vite frontend (port 5173)...
+	$(MAKE) dev-mock & $(MAKE) dev-frontend & wait
+
+dev-mock:
+	cd ui && node mock-server.js
 
 dev-frontend:
 	cd ui && npm run dev
 
-dev:
-	@echo "Run these in separate terminals:"
-	@echo "  make dev-backend"
-	@echo "  make dev-frontend"
+# Run the real Go backend (requires CGO / C compiler)
+dev-backend:
+	go run . --config=config.dev.yaml
 
 # Production build: frontend → embedded in Go binary
 build: build-frontend build-backend
