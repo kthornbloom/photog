@@ -6,12 +6,14 @@ on:
     tags: [ 'v*.*.*' ]
 
 permissions:
-  contents: write              # needed to push auto-tags
+  contents: write              # needed to push auto-tags and compose update
   packages: write              # needed to push images
 
 jobs:
   build:
     runs-on: ubuntu-latest
+    # Skip builds triggered by the automated compose-version commit
+    if: "!contains(github.event.head_commit.message, '[skip ci]')"
     steps:
       - uses: actions/checkout@v4
         with:
@@ -37,6 +39,16 @@ jobs:
           git tag "$NEXT"
           git push origin "$NEXT"
 
+      - name: Determine version string
+        id: version
+        run: |
+          if [ -n "${{ steps.autotag.outputs.version }}" ]; then
+            echo "tag=${{ steps.autotag.outputs.version }}" >> "$GITHUB_OUTPUT"
+          else
+            # Triggered by a manual tag push (e.g. v1.2.3)
+            echo "tag=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
@@ -54,7 +66,7 @@ jobs:
           images: ghcr.io/${{ github.repository_owner }}/photog
           tags: |
             type=raw,value=latest
-            type=raw,value=${{ steps.autotag.outputs.version }},enable=${{ steps.autotag.outputs.version != '' }}
+            type=raw,value=${{ steps.version.outputs.tag }}
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
             type=sha
@@ -75,3 +87,22 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      - name: Update docker-compose.yml with new version
+        if: startsWith(github.ref, 'refs/heads/')
+        run: |
+          VERSION="${{ steps.version.outputs.tag }}"
+          # Update the image tag in docker-compose.yml
+          sed -i "s|image: ghcr.io/kthornbloom/photog:.*|image: ghcr.io/kthornbloom/photog:${VERSION}|" docker-compose.yml
+
+          # Only commit if something actually changed
+          if git diff --quiet docker-compose.yml; then
+            echo "docker-compose.yml already up to date"
+          else
+            BRANCH="${GITHUB_REF#refs/heads/}"
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git add docker-compose.yml
+            git commit -m "chore: bump image tag to ${VERSION} [skip ci]"
+            git push origin HEAD:"${BRANCH}"
+          fi
