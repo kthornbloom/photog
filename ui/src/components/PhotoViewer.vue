@@ -640,6 +640,7 @@ onUnmounted(() => document.removeEventListener('keydown', onKeyDown))
   inset: 0;
   z-index: 0;
   overflow: hidden;
+  background: #000;
 }
 
 .fuzzy-background {
@@ -797,9 +798,12 @@ onUnmounted(() => document.removeEventListener('keydown', onKeyDown))
   max-width: 100%;
   max-height: 100%;
   object-fit: contain;
-  transition: transform 200ms ease;
+  transition: transform 200ms ease, box-shadow 200ms ease;
   will-change: transform;
   pointer-events: none;
+}
+
+.slide-panel:nth-child(3) .viewer-img {
   box-shadow: 0 30px 100px #000;
 }
 

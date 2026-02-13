@@ -98,8 +98,9 @@ function navigateViewer(newIndex) {
 <template>
   <AppHeader :stats="stats" />
   <IndexingBanner :progress="indexProgress" :pregen-progress="pregenProgress" />
-  <Memories @open="openViewer" />
-  <Timeline ref="timelineRef" @open="openViewer" />
+  <Timeline ref="timelineRef" @open="openViewer">
+    <Memories @open="openViewer" />
+  </Timeline>
   <PhotoViewer
     v-if="viewerPhoto"
     :photo="viewerPhoto"

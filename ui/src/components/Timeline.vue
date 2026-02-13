@@ -438,6 +438,7 @@ function onScrubberTrackClick(e) {
 
 <template>
   <div class="timeline" ref="scrollContainer" @scroll="onScroll">
+    <slot />
     <div v-if="groups.length === 0 && !loading" class="empty-state">
       <div class="empty-icon">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
@@ -647,7 +648,6 @@ function onScrubberTrackClick(e) {
   border-radius: var(--radius-sm);
   cursor: pointer;
   background: var(--bg-surface);
-  box-shadow: 0 1px 6px #000, 0 2px 50px #2f2f2f;
 }
 
 .grid-item::after {

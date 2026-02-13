@@ -103,7 +103,6 @@ onMounted(async () => {
 .memories {
   padding: var(--gap-lg) var(--gap-lg) var(--gap-md);
   border-bottom: 1px solid var(--border);
-  flex-shrink: 0;
 }
 
 .memories-header {

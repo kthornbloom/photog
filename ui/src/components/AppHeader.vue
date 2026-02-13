@@ -18,6 +18,14 @@ const showSettings = ref(false)
 const quickUpdateRunning = ref(false)
 const quickUpdateStatus = ref('')
 let pollTimer = null
+let reloadTimer = null
+
+function scheduleReload() {
+  if (reloadTimer) clearTimeout(reloadTimer)
+  reloadTimer = setTimeout(() => {
+    window.location.reload()
+  }, 5000)
+}
 
 function openSettings() {
   showSettings.value = true
@@ -67,23 +75,26 @@ function pollQuickUpdate() {
         const errors = progress.errors || 0
         const newFiles = processed - skipped - errors
         quickUpdateStatus.value = newFiles > 0
-          ? `Done! Found ${newFiles} new file${newFiles === 1 ? '' : 's'}.`
-          : 'Done! Library is up to date.'
+          ? `Done! Found ${newFiles} new file${newFiles === 1 ? '' : 's'}. Reloading...`
+          : 'Done! Library is up to date. Reloading...'
         quickUpdateRunning.value = false
         clearInterval(pollTimer)
         pollTimer = null
+        scheduleReload()
       }
     } catch {
-      quickUpdateStatus.value = 'Done.'
+      quickUpdateStatus.value = 'Done. Reloading...'
       quickUpdateRunning.value = false
       clearInterval(pollTimer)
       pollTimer = null
+      scheduleReload()
     }
   }, 1500)
 }
 
 onUnmounted(() => {
   if (pollTimer) clearInterval(pollTimer)
+  if (reloadTimer) clearTimeout(reloadTimer)
 })
 </script>
 
@@ -93,7 +104,7 @@ onUnmounted(() => {
       <img src="/logo.svg" class="logo" alt="Photog">
 
       <button class="settings-btn" @click="openSettings" title="Settings">
-        <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" fill="none" viewBox="0 0 24 24"><path stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M11.7 14c-1.077 0-1.95-.895-1.95-2s.873-2 1.95-2 1.95.895 1.95 2c0 .53-.206 1.04-.571 1.414A1.926 1.926 0 0 1 11.7 14Z" clip-rule="evenodd"/><path stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M16.884 16.063v-1.342c0-.332.129-.651.358-.886l.925-.949a1.276 1.276 0 0 0 0-1.772l-.925-.949a1.27 1.27 0 0 1-.358-.886V7.936c0-.692-.547-1.253-1.222-1.253h-1.309c-.324 0-.635-.132-.864-.367l-.925-.949a1.2 1.2 0 0 0-1.728 0l-.925.949c-.23.235-.54.367-.864.367h-1.31c-.324 0-.634.132-.864.367a1.27 1.27 0 0 0-.357.887v1.342c0 .332-.129.651-.358.886l-.925.949a1.276 1.276 0 0 0 0 1.772l.925.949c.23.235.358.554.358.886v1.342c0 .692.547 1.253 1.222 1.253h1.309c.324 0 .635.132.864.367l.925.949a1.2 1.2 0 0 0 1.728 0l.925-.949c.23-.235.54-.367.864-.367h1.308c.325 0 .636-.132.865-.367a1.27 1.27 0 0 0 .358-.886Z" clip-rule="evenodd"/></svg>
+        <svg xmlns="http://www.w3.org/2000/svg" width="26" height="26" fill="none" viewBox="0 0 24 24"><path stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M11.7 14c-1.077 0-1.95-.895-1.95-2s.873-2 1.95-2 1.95.895 1.95 2c0 .53-.206 1.04-.571 1.414A1.926 1.926 0 0 1 11.7 14Z" clip-rule="evenodd"/><path stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M16.884 16.063v-1.342c0-.332.129-.651.358-.886l.925-.949a1.276 1.276 0 0 0 0-1.772l-.925-.949a1.27 1.27 0 0 1-.358-.886V7.936c0-.692-.547-1.253-1.222-1.253h-1.309c-.324 0-.635-.132-.864-.367l-.925-.949a1.2 1.2 0 0 0-1.728 0l-.925.949c-.23.235-.54.367-.864.367h-1.31c-.324 0-.634.132-.864.367a1.27 1.27 0 0 0-.357.887v1.342c0 .332-.129.651-.358.886l-.925.949a1.276 1.276 0 0 0 0 1.772l.925.949c.23.235.358.554.358.886v1.342c0 .692.547 1.253 1.222 1.253h1.309c.324 0 .635.132.864.367l.925.949a1.2 1.2 0 0 0 1.728 0l.925-.949c.23-.235.54-.367.864-.367h1.308c.325 0 .636-.132.865-.367a1.27 1.27 0 0 0 .358-.886Z" clip-rule="evenodd"/></svg>
       </button>
     </div>
     <div class="header-right" v-if="stats">
@@ -132,7 +143,7 @@ onUnmounted(() => {
               @click="startQuickUpdate"
             >
               <svg v-if="quickUpdateRunning" class="btn-spinner" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 2v4m0 12v4m-7.07-3.93l2.83-2.83m8.48-8.48l2.83-2.83M2 12h4m12 0h4m-3.93 7.07l-2.83-2.83M7.76 7.76 4.93 4.93"/></svg>
-              <span>{{ quickUpdateRunning ? 'Updating...' : 'Quick Update' }}</span>
+              <span>{{ quickUpdateRunning ? 'Refreshing...' : 'Refresh Library' }}</span>
             </button>
             <p v-if="quickUpdateStatus" class="update-status">{{ quickUpdateStatus }}</p>
           </div>
@@ -163,7 +174,7 @@ onUnmounted(() => {
 }
 
 .logo {
-  width: 80px;
+  width: 120px;
   max-width: 100%;
 }
 
@@ -213,7 +224,7 @@ onUnmounted(() => {
   position: fixed;
   inset: 0;
   z-index: 500;
-  background: var(--bg-overlay);
+  background: #000;
   display: flex;
   align-items: center;
   justify-content: center;
