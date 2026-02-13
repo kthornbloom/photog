@@ -1,7 +1,7 @@
 name: photog
 services:
   photog:
-    image: ghcr.io/kthornbloom/photog:v0.0.13
+    image: ghcr.io/kthornbloom/photog:v0.0.15
     restart: unless-stopped
     ports:
       - target: 8080
